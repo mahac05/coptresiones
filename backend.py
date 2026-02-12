@@ -8,6 +8,7 @@ Backend для обработки видео с использованием FFm
 import os
 import subprocess
 import logging
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -94,6 +95,7 @@ class FFmpegConverter:
         command: list,
         duration_seconds: Optional[float],
         progress_callback: Optional[Callable[[int], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> subprocess.CompletedProcess:
         """Запускает ffmpeg и отображает прогресс."""
         process = subprocess.Popen(
@@ -105,8 +107,16 @@ class FFmpegConverter:
         )
 
         last_percent = -1
+        cancelled = False
         if process.stdout:
             for line in process.stdout:
+                # Проверяем отмену
+                if cancel_event and cancel_event.is_set():
+                    process.terminate()
+                    process.wait()
+                    cancelled = True
+                    break
+
                 if duration_seconds and line.startswith("out_time_ms="):
                     try:
                         ms = int(line.split("=", 1)[1].strip())
@@ -124,6 +134,11 @@ class FFmpegConverter:
                         progress_callback(100)
                     else:
                         print("\rПрогресс: 100%", end="", flush=True)
+
+        if cancelled:
+            return subprocess.CompletedProcess(
+                args=command, returncode=-1, stdout="", stderr="Отменено"
+            )
 
         returncode = process.wait()
 
@@ -145,6 +160,7 @@ class FFmpegConverter:
         output_file: str = None,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> bool:
         """
         Преобразует MP4 видео в аудио файл.
@@ -208,6 +224,7 @@ class FFmpegConverter:
                     command,
                     duration_seconds,
                     progress_callback=progress_callback,
+                    cancel_event=cancel_event,
                 )
             else:
                 result = subprocess.run(
@@ -308,6 +325,7 @@ class FFmpegConverter:
         audio_bitrate: str = "128k",
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> bool:
         """
         Сжимает MP4 видео (H.264) с использованием CRF.
@@ -355,6 +373,7 @@ class FFmpegConverter:
                     command,
                     duration_seconds,
                     progress_callback=progress_callback,
+                    cancel_event=cancel_event,
                 )
             else:
                 result = subprocess.run(

@@ -3,6 +3,7 @@
 """
 Красивый UI для обработки видео на PyQt6.
 Поддержка тёмной и светлой темы с Material Design эстетикой.
+Мульти-выбор файлов, параллельные задачи, drag-and-drop.
 """
 
 import sys
@@ -10,17 +11,17 @@ import os
 import threading
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QComboBox, QSlider, QProgressBar,
-    QFileDialog, QFrame, QStackedWidget, QRadioButton, QButtonGroup,
-    QGraphicsDropShadowEffect, QSizePolicy
+    QPushButton, QLabel, QComboBox, QSlider, QProgressBar, QFrame,
+    QStackedWidget, QFileDialog, QRadioButton, QButtonGroup,
+    QGraphicsDropShadowEffect, QSizePolicy, QScrollArea, QTextEdit,
 )
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QColor, QIcon
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QObject, QMimeData
+from PyQt6.QtGui import QFont, QColor, QIcon, QFontMetrics, QDragEnterEvent, QDropEvent
 
 from backend import FFmpegConverter
 
 
-# Темы
+# ─── Темы ───────────────────────────────────────────────────────────
 THEMES = {
     "dark": {
         "bg_primary": "#0f0f1a",
@@ -29,142 +30,406 @@ THEMES = {
         "bg_sidebar": "rgba(26, 26, 46, 0.95)",
         "text_primary": "#ffffff",
         "text_secondary": "#a0a0b0",
-        "text_muted": "#666680",
-        "border": "#333350",
-        "border_light": "rgba(255, 255, 255, 0.1)",
+        "text_muted": "#606080",
+        "border": "rgba(255, 255, 255, 0.08)",
+        "border_light": "rgba(255, 255, 255, 0.05)",
         "accent": "#00d4ff",
         "accent_secondary": "#7c3aed",
         "success": "#22c55e",
         "error": "#ef4444",
-        "input_bg": "#252542",
-        "slider_bg": "#333350",
+        "input_bg": "rgba(30, 30, 55, 0.9)",
+        "slider_bg": "rgba(255, 255, 255, 0.1)",
+        "log_bg": "rgba(15, 15, 30, 0.95)",
+        "log_text": "#c0c0d0",
+        "help_color": "#00b8d4",
     },
     "light": {
-        "bg_primary": "#f5f7fa",
-        "bg_secondary": "#ffffff",
-        "bg_card": "rgba(255, 255, 255, 0.95)",
-        "bg_sidebar": "#ffffff",
-        "text_primary": "#1a1a2e",
+        "bg_primary": "#f0f4f8",
+        "bg_secondary": "#e2e8f0",
+        "bg_card": "rgba(255, 255, 255, 0.9)",
+        "bg_sidebar": "rgba(241, 245, 249, 0.98)",
+        "text_primary": "#1e293b",
         "text_secondary": "#64748b",
         "text_muted": "#94a3b8",
-        "border": "#e2e8f0",
-        "border_light": "rgba(0, 0, 0, 0.08)",
+        "border": "rgba(0, 0, 0, 0.08)",
+        "border_light": "rgba(0, 0, 0, 0.05)",
         "accent": "#0891b2",
         "accent_secondary": "#7c3aed",
         "success": "#16a34a",
         "error": "#dc2626",
         "input_bg": "#f8fafc",
         "slider_bg": "#e2e8f0",
+        "log_bg": "#f8fafc",
+        "log_text": "#334155",
+        "help_color": "#0891b2",
     }
 }
 
 
-# Сигналы для thread-safe обновления UI
+# ─── Сигналы для thread-safe обновления UI ──────────────────────────
 class WorkerSignals(QObject):
-    progress = pyqtSignal(int)
-    finished = pyqtSignal(bool)
-    error = pyqtSignal(str)
+    progress = pyqtSignal(int, str)   # percent, file_path
+    finished = pyqtSignal(bool, str)  # success, file_path
+    error = pyqtSignal(str, str)      # error_msg, file_path
+    log = pyqtSignal(str)             # log message
 
 
+# ─── Виджет одного файла в очереди ──────────────────────────────────
+class FileTaskWidget(QFrame):
+    """Строка файла: имя, прогресс-бар, статус, кнопка отмены."""
+    cancel_requested = pyqtSignal(str)  # file_path
+    remove_requested = pyqtSignal(str)  # file_path
+
+    # Состояния
+    PENDING = "pending"
+    RUNNING = "running"
+    FINISHED = "finished"
+    CANCELLED = "cancelled"
+    ERROR = "error"
+
+    def __init__(self, file_path: str, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.state = self.PENDING
+        self.cancel_event = threading.Event()
+
+        self.setFixedHeight(48)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 4, 8, 4)
+        layout.setSpacing(10)
+
+        # Имя файла (обрезается с многоточием)
+        self.name_label = QLabel()
+        self.name_label.setFixedWidth(200)
+        self.name_label.setToolTip(file_path)
+        self._set_elided_name(file_path)
+        layout.addWidget(self.name_label)
+
+        # Прогресс-бар
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(12)
+        self.progress_bar.setTextVisible(False)
+        layout.addWidget(self.progress_bar, 1)
+
+        # Статус
+        self.status_label = QLabel("Ожидание...")
+        self.status_label.setFixedWidth(100)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status_label)
+
+        # Кнопка отмены / удаления
+        self.cancel_btn = QPushButton("❌")
+        self.cancel_btn.setFixedSize(32, 32)
+        self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_btn.setToolTip("Отменить / Удалить")
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        layout.addWidget(self.cancel_btn)
+
+    def _set_elided_name(self, path: str):
+        name = os.path.basename(path)
+        metrics = QFontMetrics(self.name_label.font())
+        elided = metrics.elidedText(f"📄 {name}", Qt.TextElideMode.ElideMiddle, 190)
+        self.name_label.setText(elided)
+
+    def _on_cancel(self):
+        if self.state == self.RUNNING:
+            self.cancel_event.set()
+            self.set_state(self.CANCELLED)
+            self.cancel_requested.emit(self.file_path)
+        else:
+            self.remove_requested.emit(self.file_path)
+
+    def set_progress(self, value: int):
+        self.progress_bar.setValue(value)
+        self.status_label.setText(f"{value}%")
+
+    def set_state(self, state: str):
+        self.state = state
+        if state == self.PENDING:
+            self.status_label.setText("Ожидание...")
+        elif state == self.RUNNING:
+            self.status_label.setText("0%")
+        elif state == self.FINISHED:
+            self.progress_bar.setValue(100)
+            self.status_label.setText("✅ Готово")
+        elif state == self.CANCELLED:
+            self.status_label.setText("❌ Отмена")
+        elif state == self.ERROR:
+            self.status_label.setText("⚠️ Ошибка")
+
+    def apply_theme(self, t, is_dark):
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {'rgba(255,255,255,0.03)' if is_dark else 'rgba(0,0,0,0.02)'};
+                border: 1px solid {t['border_light']};
+                border-radius: 10px;
+            }}
+        """)
+        self.name_label.setStyleSheet(f"color: {t['text_primary']}; font-size: 13px; border: none; background: transparent;")
+        color_map = {
+            self.FINISHED: t['success'],
+            self.ERROR: t['error'],
+            self.CANCELLED: t['text_muted'],
+        }
+        sc = color_map.get(self.state, t['text_secondary'])
+        self.status_label.setStyleSheet(f"color: {sc}; font-size: 13px; font-weight: bold; border: none; background: transparent;")
+        self.cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background: {'rgba(255,255,255,0.08)' if is_dark else 'rgba(0,0,0,0.06)'};
+                border-radius: 16px;
+            }}
+        """)
+
+
+# ─── Зона drag-and-drop ─────────────────────────────────────────────
+class DropZone(QFrame):
+    """Зона для выбора файлов кликом или перетаскиванием."""
+    files_selected = pyqtSignal(list)  # list of file paths
+
+    VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv'}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(120)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.icon_label = QLabel("🎬")
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.icon_label)
+
+        self.text_label = QLabel("Нажмите или перетащите видео файлы")
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text_label)
+
+        self.hint_label = QLabel("Поддерживается множественный выбор")
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.hint_label)
+
+    def mousePressEvent(self, event):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Выберите видео файлы", "",
+            "Видео (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.wmv);;Все файлы (*.*)"
+        )
+        if files:
+            self.files_selected.emit(files)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        files = []
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if os.path.isfile(path):
+                ext = os.path.splitext(path)[1].lower()
+                if ext in self.VIDEO_EXTENSIONS:
+                    files.append(path)
+        if files:
+            self.files_selected.emit(files)
+
+    def apply_theme(self, t, is_dark):
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {t['bg_card']};
+                border: 2px dashed {t['border']};
+                border-radius: 18px;
+            }}
+            QFrame:hover {{
+                border-color: {t['accent']};
+                background: {'rgba(0, 212, 255, 0.05)' if is_dark else 'rgba(8, 145, 178, 0.05)'};
+            }}
+        """)
+        self.icon_label.setStyleSheet(f"font-size: 40px; background: transparent; border: none;")
+        self.text_label.setStyleSheet(f"color: {t['text_secondary']}; font-size: 15px; background: transparent; border: none;")
+        self.hint_label.setStyleSheet(f"color: {t['text_muted']}; font-size: 12px; background: transparent; border: none;")
+
+
+# ─── Метка-подсказка (?) ─────────────────────────────────────────────
+class HelpLabel(QLabel):
+    """Метка (?) с тултипом-подсказкой."""
+    def __init__(self, tooltip_text: str, parent=None):
+        super().__init__("(?)", parent)
+        self.setCursor(Qt.CursorShape.WhatsThisCursor)
+        self.setToolTip(tooltip_text)
+        self.tooltip_text = tooltip_text
+
+    def apply_theme(self, t):
+        self.setStyleSheet(f"color: {t['help_color']}; font-size: 13px; font-weight: bold; background: transparent; border: none;")
+
+
+# ─── Утилита обрезки пути ───────────────────────────────────────────
+def elide_path(path: str, max_chars: int = 45) -> str:
+    """Обрезает путь с многоточием в середине."""
+    if len(path) <= max_chars:
+        return path
+    half = (max_chars - 3) // 2
+    return path[:half] + "..." + path[-half:]
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  ГЛАВНОЕ ОКНО
+# ═══════════════════════════════════════════════════════════════════
 class VideoProcessorApp(QMainWindow):
     """Главное окно приложения."""
-    
+
+    # Подсказки для технических терминов
+    TOOLTIPS = {
+        "format": (
+            "Формат выходного аудио файла:\n\n"
+            "• M4A — для Apple устройств (iPhone, iTunes)\n"
+            "• MP3 — универсальный, работает везде\n"
+            "• WAV — без сжатия (очень большой файл)\n"
+            "• FLAC — без потерь качества\n"
+            "• OGG — открытый формат"
+        ),
+        "bitrate": (
+            "Качество звука (битрейт):\n\n"
+            "• 128k — среднее качество (маленький файл)\n"
+            "• 192k — хорошее качество (рекомендуется)\n"
+            "• 320k — отличное качество (большой файл)\n\n"
+            "Чем выше число — тем лучше звук, но больше файл."
+        ),
+        "crf": (
+            "Качество видео (CRF — Constant Rate Factor):\n\n"
+            "• 18-20 — Почти без потерь (большой файл)\n"
+            "• 23 — Стандартное качество (рекомендуется)\n"
+            "• 28 — Хорошее сжатие (файл меньше)\n"
+            "• 32+ — Сильное сжатие (качество падает)\n\n"
+            "Чем меньше число — тем лучше качество, но больше файл."
+        ),
+        "preset": (
+            "Скорость сжатия:\n\n"
+            "Чем медленнее — тем меньше итоговый файл\n"
+            "(при одинаковом качестве картинки).\n\n"
+            "• Мгновенно — очень быстро, большой файл\n"
+            "• Стандарт — баланс скорости и размера\n"
+            "• Медленно — долго, но файл компактнее\n"
+            "• Максимальное сжатие — очень долго, минимальный размер"
+        ),
+        "audio_bitrate": (
+            "Качество звука в видео:\n\n"
+            "• 96k — низкое качество\n"
+            "• 128k — стандартное (рекомендуется)\n"
+            "• 192k — хорошее качество\n"
+            "• 256k — высокое качество"
+        ),
+    }
+
+    # Полный набор пресетов скорости (9 штук)
     PRESETS = {
         "Мгновенно": "ultrafast",
-        "Быстро": "veryfast", 
+        "Очень быстро": "superfast",
+        "Быстро": "veryfast",
+        "Быстрее": "faster",
+        "Чуть быстрее": "fast",
         "Стандарт": "medium",
         "Медленно": "slow",
-        "Максимум": "veryslow",
+        "Очень медленно": "slower",
+        "Максимальное сжатие": "veryslow",
     }
-    
+
+    MAX_PARALLEL = 4
+
     def __init__(self):
         super().__init__()
         self.converter = FFmpegConverter()
-        self.conv_input_file = ""
-        self.conv_output_folder = ""
-        self.comp_input_file = ""
-        self.comp_output_folder = ""
         self.current_theme = "dark"
+
+        # Списки файлов и виджетов для каждой вкладки
+        self.conv_file_widgets: dict[str, FileTaskWidget] = {}
+        self.comp_file_widgets: dict[str, FileTaskWidget] = {}
+
+        # Семафор для ограничения параллельных задач
+        self._task_semaphore = threading.Semaphore(self.MAX_PARALLEL)
+
+        # Списки help-label для тем
+        self._help_labels: list[HelpLabel] = []
+
+        self.conv_output_folder = ""
+        self.comp_output_folder = ""
+
         self._setup_ui()
         self._apply_theme()
-        
+
     def _setup_ui(self):
         self.setWindowTitle("🎬 Видео Обработчик")
         self.setMinimumSize(950, 700)
-        self.resize(1000, 750)
-        
-        # Центральный виджет
+        self.resize(1050, 780)
+
         central = QWidget()
         self.setCentralWidget(central)
-        
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         # === Боковая панель ===
         self.sidebar = QFrame()
         self.sidebar.setFixedWidth(220)
-        
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(0, 25, 0, 25)
-        sidebar_layout.setSpacing(8)
-        
-        # Логотип
-        self.logo = QLabel("🎬 Видео\nОбработчик")
+        sidebar_layout.setContentsMargins(0, 0, 0, 15)
+        sidebar_layout.setSpacing(0)
+
+        self.logo = QLabel("🎬 Обработчик")
         self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sidebar_layout.addWidget(self.logo)
         sidebar_layout.addSpacing(35)
-        
+
         # Навигация
         self.nav_audio = QPushButton("🎵  Аудио")
         self.nav_audio.setCheckable(True)
         self.nav_audio.setChecked(True)
         self.nav_audio.setMinimumHeight(55)
         self.nav_audio.clicked.connect(lambda: self._switch_tab(0))
-        
+
         self.nav_compress = QPushButton("📦  Сжатие")
         self.nav_compress.setCheckable(True)
         self.nav_compress.setMinimumHeight(55)
         self.nav_compress.clicked.connect(lambda: self._switch_tab(1))
-        
+
         sidebar_layout.addWidget(self.nav_audio)
         sidebar_layout.addWidget(self.nav_compress)
         sidebar_layout.addStretch()
-        
+
         # Переключатель темы
         self.theme_btn = QPushButton("🌙 Тёмная тема")
         self.theme_btn.setMinimumHeight(50)
         self.theme_btn.clicked.connect(self._toggle_theme)
         sidebar_layout.addWidget(self.theme_btn)
-        
+
         main_layout.addWidget(self.sidebar)
-        
+
         # === Контент ===
         self.stack = QStackedWidget()
-        
         self.stack.addWidget(self._create_convert_page())
         self.stack.addWidget(self._create_compress_page())
-        
+
         content_wrapper = QWidget()
         content_layout = QVBoxLayout(content_wrapper)
-        content_layout.setContentsMargins(35, 35, 35, 35)
+        content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.addWidget(self.stack)
-        
+
         main_layout.addWidget(content_wrapper)
-    
+
+    # ─── Темы ───────────────────────────────────────────────────────
     def _toggle_theme(self):
-        """Переключение темы."""
         self.current_theme = "light" if self.current_theme == "dark" else "dark"
         self._apply_theme()
-    
+
     def _apply_theme(self):
-        """Применяет текущую тему."""
         t = THEMES[self.current_theme]
         is_dark = self.current_theme == "dark"
-        
-        # Обновляем кнопку темы
+
         self.theme_btn.setText("☀️ Светлая тема" if is_dark else "🌙 Тёмная тема")
-        
+
         # Главный стиль
         self.setStyleSheet(f"""
             QMainWindow {{
@@ -219,15 +484,15 @@ class VideoProcessorApp(QMainWindow):
             QProgressBar {{
                 background: {t['slider_bg']};
                 border: none;
-                border-radius: 8px;
-                height: 16px;
+                border-radius: 6px;
+                height: 12px;
                 text-align: center;
                 color: transparent;
             }}
             QProgressBar::chunk {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 {t['accent']}, stop:1 {t['accent_secondary']});
-                border-radius: 8px;
+                border-radius: 6px;
             }}
             QRadioButton {{
                 color: {t['text_secondary']};
@@ -248,8 +513,25 @@ class VideoProcessorApp(QMainWindow):
             QRadioButton:hover {{
                 color: {t['text_primary']};
             }}
+            QScrollArea {{
+                border: none;
+                background: transparent;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {t['border']};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
         """)
-        
+
         # Боковая панель
         self.sidebar.setStyleSheet(f"""
             QFrame {{
@@ -257,8 +539,7 @@ class VideoProcessorApp(QMainWindow):
                 border-right: 1px solid {t['border']};
             }}
         """)
-        
-        # Логотип
+
         self.logo.setStyleSheet(f"""
             color: {t['text_primary']};
             font-size: 22px;
@@ -266,7 +547,7 @@ class VideoProcessorApp(QMainWindow):
             padding: 20px;
             background: transparent;
         """)
-        
+
         # Стили навигации
         nav_checked = f"""
             QPushButton {{
@@ -282,7 +563,6 @@ class VideoProcessorApp(QMainWindow):
                 text-align: left;
             }}
         """
-        
         nav_unchecked = f"""
             QPushButton {{
                 background: transparent;
@@ -299,11 +579,9 @@ class VideoProcessorApp(QMainWindow):
                 color: {t['text_primary']};
             }}
         """
-        
         self.nav_audio.setStyleSheet(nav_checked if self.nav_audio.isChecked() else nav_unchecked)
         self.nav_compress.setStyleSheet(nav_checked if self.nav_compress.isChecked() else nav_unchecked)
-        
-        # Кнопка темы
+
         self.theme_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
@@ -319,49 +597,14 @@ class VideoProcessorApp(QMainWindow):
                 color: {t['accent']};
             }}
         """)
-        
-        # Стек
+
         self.stack.setStyleSheet("background: transparent;")
-        
-        # Обновляем все карточки и зоны
+
+        # Обновляем виджеты
         self._update_themed_widgets(t, is_dark)
-    
+
     def _update_themed_widgets(self, t, is_dark):
-        """Обновляет стили виджетов с учётом темы."""
-        # Drop zones
-        drop_style = f"""
-            QFrame {{
-                background: {t['bg_card']};
-                border: 2px dashed {t['border']};
-                border-radius: 18px;
-            }}
-            QFrame:hover {{
-                border-color: {t['accent']};
-                background: {'rgba(0, 212, 255, 0.05)' if is_dark else 'rgba(8, 145, 178, 0.05)'};
-            }}
-        """
-        
-        if hasattr(self, 'conv_drop_zone'):
-            self.conv_drop_zone.setStyleSheet(drop_style)
-            for child in self.conv_drop_zone.findChildren(QLabel):
-                if "не выбран" in child.text() or "Файл" in child.text():
-                    child.setStyleSheet(f"color: {t['text_muted']}; font-size: 15px; background: transparent; border: none;")
-                elif "Нажмите" in child.text():
-                    child.setStyleSheet(f"color: {t['text_secondary']}; font-size: 16px; background: transparent; border: none;")
-                else:
-                    child.setStyleSheet(f"font-size: 48px; background: transparent; border: none;")
-        
-        if hasattr(self, 'comp_drop_zone'):
-            self.comp_drop_zone.setStyleSheet(drop_style)
-            for child in self.comp_drop_zone.findChildren(QLabel):
-                if "не выбран" in child.text() or "Файл" in child.text():
-                    child.setStyleSheet(f"color: {t['text_muted']}; font-size: 15px; background: transparent; border: none;")
-                elif "Нажмите" in child.text():
-                    child.setStyleSheet(f"color: {t['text_secondary']}; font-size: 16px; background: transparent; border: none;")
-                else:
-                    child.setStyleSheet(f"font-size: 48px; background: transparent; border: none;")
-        
-        # Cards
+        # Карточки настроек
         card_style = f"""
             QFrame {{
                 background: {t['bg_card']};
@@ -369,19 +612,21 @@ class VideoProcessorApp(QMainWindow):
                 border-radius: 18px;
             }}
         """
-        
-        if hasattr(self, 'conv_settings_card'):
-            self.conv_settings_card.setStyleSheet(card_style)
-        if hasattr(self, 'comp_settings_card'):
-            self.comp_settings_card.setStyleSheet(card_style)
-        
-        # Headers
-        if hasattr(self, 'conv_header'):
-            self.conv_header.setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
-        if hasattr(self, 'comp_header'):
-            self.comp_header.setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
-        
-        # Primary buttons
+        for attr in ['conv_settings_card', 'comp_settings_card']:
+            if hasattr(self, attr):
+                getattr(self, attr).setStyleSheet(card_style)
+
+        # Заголовки
+        for attr in ['conv_header', 'comp_header']:
+            if hasattr(self, attr):
+                getattr(self, attr).setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
+
+        # Drop zones
+        for attr in ['conv_drop_zone', 'comp_drop_zone']:
+            if hasattr(self, attr):
+                getattr(self, attr).apply_theme(t, is_dark)
+
+        # Кнопки запуска
         btn_style = f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -406,13 +651,11 @@ class VideoProcessorApp(QMainWindow):
                 color: {t['text_muted']};
             }}
         """
-        
-        if hasattr(self, 'conv_run_btn'):
-            self.conv_run_btn.setStyleSheet(btn_style)
-        if hasattr(self, 'comp_run_btn'):
-            self.comp_run_btn.setStyleSheet(btn_style)
-        
-        # Secondary buttons
+        for attr in ['conv_run_btn', 'comp_run_btn']:
+            if hasattr(self, attr):
+                getattr(self, attr).setStyleSheet(btn_style)
+
+        # Вторичные кнопки
         sec_btn_style = f"""
             QPushButton {{
                 background: transparent;
@@ -426,403 +669,477 @@ class VideoProcessorApp(QMainWindow):
                 background: {'rgba(0, 212, 255, 0.1)' if is_dark else 'rgba(8, 145, 178, 0.1)'};
             }}
         """
-        
-        if hasattr(self, 'conv_folder_btn'):
-            self.conv_folder_btn.setStyleSheet(sec_btn_style)
-        if hasattr(self, 'comp_folder_btn'):
-            self.comp_folder_btn.setStyleSheet(sec_btn_style)
-        
-        # Labels
-        if hasattr(self, 'conv_progress_label'):
-            self.conv_progress_label.setStyleSheet(f"color: {t['text_secondary']}; font-size: 16px; min-width: 50px;")
-        if hasattr(self, 'comp_progress_label'):
-            self.comp_progress_label.setStyleSheet(f"color: {t['text_secondary']}; font-size: 16px; min-width: 50px;")
-        
+        for attr in ['conv_folder_btn', 'comp_folder_btn']:
+            if hasattr(self, attr):
+                getattr(self, attr).setStyleSheet(sec_btn_style)
+
+        # CRF
         if hasattr(self, 'comp_crf_value'):
             self.comp_crf_value.setStyleSheet(f"color: {t['accent']}; font-size: 15px;")
-    
+
+        # Help labels
+        for hl in self._help_labels:
+            hl.apply_theme(t)
+
+        # Журналы
+        log_style = f"""
+            QTextEdit {{
+                background: {t['log_bg']};
+                color: {t['log_text']};
+                border: 1px solid {t['border_light']};
+                border-radius: 10px;
+                padding: 8px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+            }}
+        """
+        for attr in ['conv_log', 'comp_log']:
+            if hasattr(self, attr):
+                getattr(self, attr).setStyleSheet(log_style)
+
+        # Лейблы журнала
+        for attr in ['conv_log_label', 'comp_log_label']:
+            if hasattr(self, attr):
+                getattr(self, attr).setStyleSheet(f"color: {t['text_secondary']}; font-size: 14px; font-weight: bold;")
+
+        # Файловые виджеты
+        for fw in list(self.conv_file_widgets.values()) + list(self.comp_file_widgets.values()):
+            fw.apply_theme(t, is_dark)
+
+        # Путь к папке
+        for attr in ['conv_folder_label', 'comp_folder_label']:
+            if hasattr(self, attr):
+                w = getattr(self, attr)
+                if w.text():
+                    w.setStyleSheet(f"color: {t['success']}; font-size: 14px;")
+
     def _switch_tab(self, index):
         self.stack.setCurrentIndex(index)
         self.nav_audio.setChecked(index == 0)
         self.nav_compress.setChecked(index == 1)
-        self._apply_theme()  # Обновляем стили навигации
-    
+        self._apply_theme()
+
+    # ─── Вспомогательные ────────────────────────────────────────────
+    def _make_help(self, key: str) -> HelpLabel:
+        hl = HelpLabel(self.TOOLTIPS[key])
+        self._help_labels.append(hl)
+        return hl
+
+    def _make_scroll_page(self, inner_widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(inner_widget)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        return scroll
+
     # ==================== КОНВЕРТАЦИЯ ====================
-    
+
     def _create_convert_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(22)
-        
+        layout.setSpacing(18)
+        layout.setContentsMargins(35, 35, 35, 35)
+
         # Заголовок
         self.conv_header = QLabel("🎵 Конвертация в аудио")
         layout.addWidget(self.conv_header)
-        
-        # Выбор файла
-        self.conv_drop_zone = QFrame()
-        self.conv_drop_zone.setMinimumHeight(160)
-        self.conv_drop_zone.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.conv_drop_zone.mousePressEvent = lambda e: self._conv_pick_file()
-        
-        drop_layout = QVBoxLayout(self.conv_drop_zone)
-        drop_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        icon_label = QLabel("🎬")
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        text_label = QLabel("Нажмите для выбора видео")
-        text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        self.conv_file_label = QLabel("Файл не выбран")
-        self.conv_file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        drop_layout.addWidget(icon_label)
-        drop_layout.addWidget(text_label)
-        drop_layout.addWidget(self.conv_file_label)
-        
+
+        # Зона выбора файлов
+        self.conv_drop_zone = DropZone()
+        self.conv_drop_zone.files_selected.connect(self._conv_add_files)
         layout.addWidget(self.conv_drop_zone)
-        
+
+        # Список файлов
+        self.conv_file_list_widget = QWidget()
+        self.conv_file_list_layout = QVBoxLayout(self.conv_file_list_widget)
+        self.conv_file_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.conv_file_list_layout.setSpacing(6)
+
+        conv_file_scroll = QScrollArea()
+        conv_file_scroll.setWidgetResizable(True)
+        conv_file_scroll.setWidget(self.conv_file_list_widget)
+        conv_file_scroll.setMaximumHeight(200)
+        conv_file_scroll.setMinimumHeight(0)
+        conv_file_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        conv_file_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.conv_file_scroll = conv_file_scroll
+        layout.addWidget(conv_file_scroll)
+
         # Настройки
         self.conv_settings_card = QFrame()
         card_layout = QVBoxLayout(self.conv_settings_card)
         card_layout.setContentsMargins(28, 22, 28, 28)
         card_layout.setSpacing(18)
-        
+
         title_label = QLabel("⚙️ Настройки")
         title_label.setStyleSheet("font-size: 18px; font-weight: bold;")
         card_layout.addWidget(title_label)
-        
+
         # Формат и битрейт
         format_layout = QHBoxLayout()
-        
-        format_label = QLabel("Формат:")
+
+        fmt_lbl = QLabel("Формат:")
+        format_layout.addWidget(fmt_lbl)
+        format_layout.addWidget(self._make_help("format"))
+
         self.conv_format = QComboBox()
         self.conv_format.addItems(list(FFmpegConverter.AUDIO_FORMATS.keys()))
         self.conv_format.setCurrentText("m4a")
-        
-        bitrate_label = QLabel("Битрейт:")
+        format_layout.addWidget(self.conv_format)
+        format_layout.addSpacing(35)
+
+        br_lbl = QLabel("Битрейт:")
+        format_layout.addWidget(br_lbl)
+        format_layout.addWidget(self._make_help("bitrate"))
+
         self.conv_bitrate = QComboBox()
         self.conv_bitrate.addItems(["96k", "128k", "192k", "256k", "320k"])
         self.conv_bitrate.setCurrentText("192k")
-        
-        format_layout.addWidget(format_label)
-        format_layout.addWidget(self.conv_format)
-        format_layout.addSpacing(35)
-        format_layout.addWidget(bitrate_label)
         format_layout.addWidget(self.conv_bitrate)
         format_layout.addStretch()
-        
+
         card_layout.addLayout(format_layout)
-        
+
         # Сохранение
         save_label = QLabel("Сохранить:")
         card_layout.addWidget(save_label)
-        
+
         self.conv_save_same = QRadioButton("В той же папке")
         self.conv_save_custom = QRadioButton("Выбрать папку")
         self.conv_save_same.setChecked(True)
-        
+
         self.conv_save_group = QButtonGroup()
         self.conv_save_group.addButton(self.conv_save_same)
         self.conv_save_group.addButton(self.conv_save_custom)
         self.conv_save_custom.toggled.connect(self._conv_save_mode_changed)
-        
+
         save_layout = QHBoxLayout()
         save_layout.addWidget(self.conv_save_same)
         save_layout.addWidget(self.conv_save_custom)
         save_layout.addStretch()
         card_layout.addLayout(save_layout)
-        
+
         self.conv_folder_btn = QPushButton("📁 Выбрать папку...")
         self.conv_folder_btn.hide()
         self.conv_folder_btn.clicked.connect(self._conv_pick_folder)
         card_layout.addWidget(self.conv_folder_btn)
-        
+
         self.conv_folder_label = QLabel("")
         self.conv_folder_label.hide()
         card_layout.addWidget(self.conv_folder_label)
-        
+
         layout.addWidget(self.conv_settings_card)
-        
-        # Кнопка и прогресс
-        action_layout = QVBoxLayout()
-        action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+
+        # Кнопка запуска
         self.conv_run_btn = QPushButton("▶ Конвертировать")
         self.conv_run_btn.setMinimumWidth(220)
         self.conv_run_btn.setMinimumHeight(55)
         self.conv_run_btn.clicked.connect(self._conv_run)
-        action_layout.addWidget(self.conv_run_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        progress_layout = QHBoxLayout()
-        progress_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        self.conv_progress = QProgressBar()
-        self.conv_progress.setFixedWidth(420)
-        self.conv_progress.setFixedHeight(16)
-        self.conv_progress.setValue(0)
-        
-        self.conv_progress_label = QLabel("0%")
-        
-        progress_layout.addWidget(self.conv_progress)
-        progress_layout.addWidget(self.conv_progress_label)
-        action_layout.addLayout(progress_layout)
-        
-        self.conv_status = QLabel("")
-        self.conv_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        action_layout.addWidget(self.conv_status)
-        
-        layout.addLayout(action_layout)
+        layout.addWidget(self.conv_run_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Журнал
+        self.conv_log_label = QLabel("📋 Журнал")
+        layout.addWidget(self.conv_log_label)
+
+        self.conv_log = QTextEdit()
+        self.conv_log.setReadOnly(True)
+        self.conv_log.setMaximumHeight(180)
+        self.conv_log.setMinimumHeight(80)
+        layout.addWidget(self.conv_log)
+
         layout.addStretch()
-        
-        return page
-    
-    def _conv_pick_file(self):
-        file, _ = QFileDialog.getOpenFileName(
-            self, "Выберите видео",
-            "", "Видео (*.mp4 *.mkv *.avi *.mov *.webm);;Все файлы (*.*)"
-        )
-        if file:
-            self.conv_input_file = file
-            self.conv_file_label.setText(os.path.basename(file))
-            t = THEMES[self.current_theme]
-            self.conv_file_label.setStyleSheet(f"color: {t['success']}; font-size: 15px; background: transparent; border: none;")
-    
+
+        return self._make_scroll_page(page)
+
+    def _conv_add_files(self, files: list):
+        t = THEMES[self.current_theme]
+        is_dark = self.current_theme == "dark"
+        for f in files:
+            if f not in self.conv_file_widgets:
+                fw = FileTaskWidget(f)
+                fw.remove_requested.connect(self._conv_remove_file)
+                fw.cancel_requested.connect(lambda p: self._conv_log_msg(f"❌ Отменено: {os.path.basename(p)}"))
+                fw.apply_theme(t, is_dark)
+                self.conv_file_widgets[f] = fw
+                self.conv_file_list_layout.addWidget(fw)
+        # Обновляем высоту скролла
+        count = len(self.conv_file_widgets)
+        self.conv_file_scroll.setMaximumHeight(min(200, count * 54 + 10))
+        self._conv_log_msg(f"📂 Добавлено файлов: {len(files)}")
+
+    def _conv_remove_file(self, path: str):
+        fw = self.conv_file_widgets.pop(path, None)
+        if fw:
+            self.conv_file_list_layout.removeWidget(fw)
+            fw.deleteLater()
+            count = len(self.conv_file_widgets)
+            self.conv_file_scroll.setMaximumHeight(min(200, max(0, count * 54 + 10)))
+
     def _conv_save_mode_changed(self, checked):
         self.conv_folder_btn.setVisible(checked)
         self.conv_folder_label.setVisible(checked and bool(self.conv_output_folder))
-    
+
     def _conv_pick_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку")
         if folder:
             self.conv_output_folder = folder
-            self.conv_folder_label.setText(f"📁 {folder}")
             t = THEMES[self.current_theme]
+            self.conv_folder_label.setText(f"📁 {elide_path(folder)}")
+            self.conv_folder_label.setToolTip(folder)
             self.conv_folder_label.setStyleSheet(f"color: {t['success']}; font-size: 14px;")
             self.conv_folder_label.show()
-    
+
+    def _conv_log_msg(self, msg: str):
+        self.conv_log.append(msg)
+
     def _conv_run(self):
         t = THEMES[self.current_theme]
-        
-        if not self.conv_input_file:
-            self.conv_status.setText("⚠️ Выберите видео файл!")
-            self.conv_status.setStyleSheet(f"color: {t['error']}; font-size: 18px; font-weight: bold;")
+
+        # Собираем файлы в ожидании
+        pending = [fw for fw in self.conv_file_widgets.values() if fw.state == FileTaskWidget.PENDING]
+        if not pending:
+            self._conv_log_msg("⚠️ Нет файлов для конвертации!")
             return
-        
+
         if self.conv_save_custom.isChecked() and not self.conv_output_folder:
-            self.conv_status.setText("⚠️ Выберите папку!")
-            self.conv_status.setStyleSheet(f"color: {t['error']}; font-size: 18px; font-weight: bold;")
+            self._conv_log_msg("⚠️ Выберите папку для сохранения!")
             return
-        
-        # Формируем путь
+
         ext = self.conv_format.currentText()
-        base = os.path.splitext(os.path.basename(self.conv_input_file))[0]
-        folder = self.conv_output_folder if self.conv_save_custom.isChecked() else os.path.dirname(self.conv_input_file)
-        output_file = os.path.join(folder, f"{base}.{ext}")
-        
-        # UI
-        self.conv_run_btn.setEnabled(False)
-        self.conv_progress.setValue(0)
-        self.conv_progress_label.setText("0%")
-        self.conv_status.setText("⏳ Конвертация...")
-        self.conv_status.setStyleSheet(f"color: {t['text_secondary']}; font-size: 18px; font-weight: bold;")
-        
+        bitrate = self.conv_bitrate.currentText()
+
         # Сигналы
         signals = WorkerSignals()
         signals.progress.connect(self._conv_update_progress)
-        signals.finished.connect(self._conv_finished)
-        
-        def worker():
+        signals.finished.connect(self._conv_task_finished)
+        signals.log.connect(self._conv_log_msg)
+
+        for fw in pending:
+            fw.set_state(FileTaskWidget.RUNNING)
+            t_obj = THEMES[self.current_theme]
+            fw.apply_theme(t_obj, self.current_theme == "dark")
+
+            base = os.path.splitext(os.path.basename(fw.file_path))[0]
+            folder = self.conv_output_folder if self.conv_save_custom.isChecked() else os.path.dirname(fw.file_path)
+            output_file = os.path.join(folder, f"{base}.{ext}")
+
+            thread = threading.Thread(
+                target=self._conv_worker,
+                args=(fw.file_path, output_file, ext, bitrate, signals, fw.cancel_event),
+                daemon=True
+            )
+            thread.start()
+
+        self._conv_log_msg(f"⏳ Запущено задач: {len(pending)} (макс. параллельно: {self.MAX_PARALLEL})")
+
+    def _conv_worker(self, input_file, output_file, fmt, bitrate, signals, cancel_event):
+        self._task_semaphore.acquire()
+        try:
+            if cancel_event.is_set():
+                signals.finished.emit(False, input_file)
+                return
+
+            signals.log.emit(f"▶ Конвертация: {os.path.basename(input_file)}")
+
             def progress_cb(p):
-                signals.progress.emit(p)
-            
-            try:
-                ok = self.converter.convert_mp4_to_audio(
-                    input_file=self.conv_input_file,
-                    output_format=self.conv_format.currentText(),
-                    bitrate=self.conv_bitrate.currentText(),
-                    output_file=output_file,
-                    show_progress=True,
-                    progress_callback=progress_cb,
-                )
-                signals.finished.emit(ok)
-            except Exception as e:
-                signals.error.emit(str(e))
-                signals.finished.emit(False)
-        
-        threading.Thread(target=worker, daemon=True).start()
-    
-    def _conv_update_progress(self, value):
-        self.conv_progress.setValue(value)
-        self.conv_progress_label.setText(f"{value}%")
-    
-    def _conv_finished(self, success):
+                signals.progress.emit(p, input_file)
+
+            ok = self.converter.convert_mp4_to_audio(
+                input_file=input_file,
+                output_format=fmt,
+                bitrate=bitrate,
+                output_file=output_file,
+                show_progress=True,
+                progress_callback=progress_cb,
+                cancel_event=cancel_event,
+            )
+            signals.finished.emit(ok, input_file)
+        except Exception as e:
+            signals.log.emit(f"❌ Ошибка ({os.path.basename(input_file)}): {e}")
+            signals.finished.emit(False, input_file)
+        finally:
+            self._task_semaphore.release()
+
+    def _conv_update_progress(self, value, file_path):
+        fw = self.conv_file_widgets.get(file_path)
+        if fw and fw.state == FileTaskWidget.RUNNING:
+            fw.set_progress(value)
+
+    def _conv_task_finished(self, success, file_path):
+        fw = self.conv_file_widgets.get(file_path)
+        if not fw:
+            return
         t = THEMES[self.current_theme]
-        self.conv_run_btn.setEnabled(True)
-        if success:
-            self.conv_status.setText("✅ Готово!")
-            self.conv_status.setStyleSheet(f"color: {t['success']}; font-size: 18px; font-weight: bold;")
+        name = os.path.basename(file_path)
+        if fw.state == FileTaskWidget.CANCELLED:
+            self._conv_log_msg(f"❌ Отменено: {name}")
+        elif success:
+            fw.set_state(FileTaskWidget.FINISHED)
+            self._conv_log_msg(f"✅ Готово: {name}")
         else:
-            self.conv_status.setText("❌ Ошибка")
-            self.conv_status.setStyleSheet(f"color: {t['error']}; font-size: 18px; font-weight: bold;")
-    
+            fw.set_state(FileTaskWidget.ERROR)
+            self._conv_log_msg(f"⚠️ Ошибка: {name}")
+        fw.apply_theme(t, self.current_theme == "dark")
+
     # ==================== СЖАТИЕ ====================
-    
+
     def _create_compress_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(22)
-        
+        layout.setSpacing(18)
+        layout.setContentsMargins(35, 35, 35, 35)
+
         # Заголовок
         self.comp_header = QLabel("📦 Сжатие видео")
         layout.addWidget(self.comp_header)
-        
-        # Выбор файла
-        self.comp_drop_zone = QFrame()
-        self.comp_drop_zone.setMinimumHeight(160)
-        self.comp_drop_zone.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.comp_drop_zone.mousePressEvent = lambda e: self._comp_pick_file()
-        
-        drop_layout = QVBoxLayout(self.comp_drop_zone)
-        drop_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        icon_label = QLabel("🎬")
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        text_label = QLabel("Нажмите для выбора видео")
-        text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        self.comp_file_label = QLabel("Файл не выбран")
-        self.comp_file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        drop_layout.addWidget(icon_label)
-        drop_layout.addWidget(text_label)
-        drop_layout.addWidget(self.comp_file_label)
-        
+
+        # Зона выбора файлов
+        self.comp_drop_zone = DropZone()
+        self.comp_drop_zone.files_selected.connect(self._comp_add_files)
         layout.addWidget(self.comp_drop_zone)
-        
+
+        # Список файлов
+        self.comp_file_list_widget = QWidget()
+        self.comp_file_list_layout = QVBoxLayout(self.comp_file_list_widget)
+        self.comp_file_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.comp_file_list_layout.setSpacing(6)
+
+        comp_file_scroll = QScrollArea()
+        comp_file_scroll.setWidgetResizable(True)
+        comp_file_scroll.setWidget(self.comp_file_list_widget)
+        comp_file_scroll.setMaximumHeight(200)
+        comp_file_scroll.setMinimumHeight(0)
+        comp_file_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        comp_file_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.comp_file_scroll = comp_file_scroll
+        layout.addWidget(comp_file_scroll)
+
         # Настройки
         self.comp_settings_card = QFrame()
         card_layout = QVBoxLayout(self.comp_settings_card)
         card_layout.setContentsMargins(28, 22, 28, 28)
         card_layout.setSpacing(18)
-        
+
         title_label = QLabel("⚙️ Настройки сжатия")
         title_label.setStyleSheet("font-size: 18px; font-weight: bold;")
         card_layout.addWidget(title_label)
-        
+
         # CRF
         crf_layout = QHBoxLayout()
-        crf_label = QLabel("Качество (CRF):")
-        
-        self.comp_crf_value = QLabel("23 (стандартное)")
-        
-        crf_layout.addWidget(crf_label)
+        crf_lbl = QLabel("Качество (CRF):")
+        crf_layout.addWidget(crf_lbl)
+        crf_layout.addWidget(self._make_help("crf"))
         crf_layout.addStretch()
+
+        self.comp_crf_value = QLabel("23 (стандартное)")
         crf_layout.addWidget(self.comp_crf_value)
         card_layout.addLayout(crf_layout)
-        
+
         self.comp_crf_slider = QSlider(Qt.Orientation.Horizontal)
         self.comp_crf_slider.setRange(18, 40)
         self.comp_crf_slider.setValue(23)
         self.comp_crf_slider.valueChanged.connect(self._comp_crf_changed)
         card_layout.addWidget(self.comp_crf_slider)
-        
+
         # Пресет и аудио
         preset_layout = QHBoxLayout()
-        
-        preset_label = QLabel("Скорость:")
+
+        preset_lbl = QLabel("Скорость:")
+        preset_layout.addWidget(preset_lbl)
+        preset_layout.addWidget(self._make_help("preset"))
+
         self.comp_preset = QComboBox()
         self.comp_preset.addItems(list(self.PRESETS.keys()))
         self.comp_preset.setCurrentText("Стандарт")
-        
-        audio_label = QLabel("Звук:")
+        preset_layout.addWidget(self.comp_preset)
+        preset_layout.addSpacing(35)
+
+        audio_lbl = QLabel("Звук:")
+        preset_layout.addWidget(audio_lbl)
+        preset_layout.addWidget(self._make_help("audio_bitrate"))
+
         self.comp_audio = QComboBox()
         self.comp_audio.addItems(["96k", "128k", "192k", "256k"])
         self.comp_audio.setCurrentText("128k")
-        
-        preset_layout.addWidget(preset_label)
-        preset_layout.addWidget(self.comp_preset)
-        preset_layout.addSpacing(35)
-        preset_layout.addWidget(audio_label)
         preset_layout.addWidget(self.comp_audio)
         preset_layout.addStretch()
+
         card_layout.addLayout(preset_layout)
-        
+
         # Сохранение
         save_label = QLabel("Сохранить:")
         card_layout.addWidget(save_label)
-        
+
         self.comp_save_same = QRadioButton("В той же папке")
         self.comp_save_custom = QRadioButton("Выбрать папку")
         self.comp_save_same.setChecked(True)
-        
+
         self.comp_save_group = QButtonGroup()
         self.comp_save_group.addButton(self.comp_save_same)
         self.comp_save_group.addButton(self.comp_save_custom)
         self.comp_save_custom.toggled.connect(self._comp_save_mode_changed)
-        
+
         save_layout = QHBoxLayout()
         save_layout.addWidget(self.comp_save_same)
         save_layout.addWidget(self.comp_save_custom)
         save_layout.addStretch()
         card_layout.addLayout(save_layout)
-        
+
         self.comp_folder_btn = QPushButton("📁 Выбрать папку...")
         self.comp_folder_btn.hide()
         self.comp_folder_btn.clicked.connect(self._comp_pick_folder)
         card_layout.addWidget(self.comp_folder_btn)
-        
+
         self.comp_folder_label = QLabel("")
         self.comp_folder_label.hide()
         card_layout.addWidget(self.comp_folder_label)
-        
+
         layout.addWidget(self.comp_settings_card)
-        
-        # Кнопка и прогресс
-        action_layout = QVBoxLayout()
-        action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+
+        # Кнопка запуска
         self.comp_run_btn = QPushButton("▶ Сжать видео")
         self.comp_run_btn.setMinimumWidth(220)
         self.comp_run_btn.setMinimumHeight(55)
         self.comp_run_btn.clicked.connect(self._comp_run)
-        action_layout.addWidget(self.comp_run_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        progress_layout = QHBoxLayout()
-        progress_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        self.comp_progress = QProgressBar()
-        self.comp_progress.setFixedWidth(420)
-        self.comp_progress.setFixedHeight(16)
-        self.comp_progress.setValue(0)
-        
-        self.comp_progress_label = QLabel("0%")
-        
-        progress_layout.addWidget(self.comp_progress)
-        progress_layout.addWidget(self.comp_progress_label)
-        action_layout.addLayout(progress_layout)
-        
-        self.comp_status = QLabel("")
-        self.comp_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        action_layout.addWidget(self.comp_status)
-        
-        layout.addLayout(action_layout)
+        layout.addWidget(self.comp_run_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Журнал
+        self.comp_log_label = QLabel("📋 Журнал")
+        layout.addWidget(self.comp_log_label)
+
+        self.comp_log = QTextEdit()
+        self.comp_log.setReadOnly(True)
+        self.comp_log.setMaximumHeight(180)
+        self.comp_log.setMinimumHeight(80)
+        layout.addWidget(self.comp_log)
+
         layout.addStretch()
-        
-        return page
-    
-    def _comp_pick_file(self):
-        file, _ = QFileDialog.getOpenFileName(
-            self, "Выберите видео",
-            "", "Видео (*.mp4 *.mkv *.avi *.mov *.webm);;Все файлы (*.*)"
-        )
-        if file:
-            self.comp_input_file = file
-            self.comp_file_label.setText(os.path.basename(file))
-            t = THEMES[self.current_theme]
-            self.comp_file_label.setStyleSheet(f"color: {t['success']}; font-size: 15px; background: transparent; border: none;")
-    
+
+        return self._make_scroll_page(page)
+
+    def _comp_add_files(self, files: list):
+        t = THEMES[self.current_theme]
+        is_dark = self.current_theme == "dark"
+        for f in files:
+            if f not in self.comp_file_widgets:
+                fw = FileTaskWidget(f)
+                fw.remove_requested.connect(self._comp_remove_file)
+                fw.cancel_requested.connect(lambda p: self._comp_log_msg(f"❌ Отменено: {os.path.basename(p)}"))
+                fw.apply_theme(t, is_dark)
+                self.comp_file_widgets[f] = fw
+                self.comp_file_list_layout.addWidget(fw)
+        count = len(self.comp_file_widgets)
+        self.comp_file_scroll.setMaximumHeight(min(200, count * 54 + 10))
+        self._comp_log_msg(f"📂 Добавлено файлов: {len(files)}")
+
+    def _comp_remove_file(self, path: str):
+        fw = self.comp_file_widgets.pop(path, None)
+        if fw:
+            self.comp_file_list_layout.removeWidget(fw)
+            fw.deleteLater()
+            count = len(self.comp_file_widgets)
+            self.comp_file_scroll.setMaximumHeight(min(200, max(0, count * 54 + 10)))
+
     def _comp_crf_changed(self, value):
         if value <= 20:
             desc = "высокое качество"
@@ -833,94 +1150,121 @@ class VideoProcessorApp(QMainWindow):
         else:
             desc = "сильное сжатие"
         self.comp_crf_value.setText(f"{value} ({desc})")
-    
+
     def _comp_save_mode_changed(self, checked):
         self.comp_folder_btn.setVisible(checked)
         self.comp_folder_label.setVisible(checked and bool(self.comp_output_folder))
-    
+
     def _comp_pick_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку")
         if folder:
             self.comp_output_folder = folder
-            self.comp_folder_label.setText(f"📁 {folder}")
             t = THEMES[self.current_theme]
+            self.comp_folder_label.setText(f"📁 {elide_path(folder)}")
+            self.comp_folder_label.setToolTip(folder)
             self.comp_folder_label.setStyleSheet(f"color: {t['success']}; font-size: 14px;")
             self.comp_folder_label.show()
-    
+
+    def _comp_log_msg(self, msg: str):
+        self.comp_log.append(msg)
+
     def _comp_run(self):
         t = THEMES[self.current_theme]
-        
-        if not self.comp_input_file:
-            self.comp_status.setText("⚠️ Выберите видео файл!")
-            self.comp_status.setStyleSheet(f"color: {t['error']}; font-size: 18px; font-weight: bold;")
+
+        pending = [fw for fw in self.comp_file_widgets.values() if fw.state == FileTaskWidget.PENDING]
+        if not pending:
+            self._comp_log_msg("⚠️ Нет файлов для сжатия!")
             return
-        
+
         if self.comp_save_custom.isChecked() and not self.comp_output_folder:
-            self.comp_status.setText("⚠️ Выберите папку!")
-            self.comp_status.setStyleSheet(f"color: {t['error']}; font-size: 18px; font-weight: bold;")
+            self._comp_log_msg("⚠️ Выберите папку для сохранения!")
             return
-        
-        # Формируем путь
-        base = os.path.splitext(os.path.basename(self.comp_input_file))[0]
-        folder = self.comp_output_folder if self.comp_save_custom.isChecked() else os.path.dirname(self.comp_input_file)
-        output_file = os.path.join(folder, f"{base}_сжатое.mp4")
-        
-        # UI
-        self.comp_run_btn.setEnabled(False)
-        self.comp_progress.setValue(0)
-        self.comp_progress_label.setText("0%")
-        self.comp_status.setText("⏳ Сжатие...")
-        self.comp_status.setStyleSheet(f"color: {t['text_secondary']}; font-size: 18px; font-weight: bold;")
-        
-        # Сигналы
+
+        crf = self.comp_crf_slider.value()
+        preset_ru = self.comp_preset.currentText()
+        preset_en = self.PRESETS.get(preset_ru, "medium")
+        audio_br = self.comp_audio.currentText()
+
         signals = WorkerSignals()
         signals.progress.connect(self._comp_update_progress)
-        signals.finished.connect(self._comp_finished)
-        
-        def worker():
+        signals.finished.connect(self._comp_task_finished)
+        signals.log.connect(self._comp_log_msg)
+
+        for fw in pending:
+            fw.set_state(FileTaskWidget.RUNNING)
+            t_obj = THEMES[self.current_theme]
+            fw.apply_theme(t_obj, self.current_theme == "dark")
+
+            base = os.path.splitext(os.path.basename(fw.file_path))[0]
+            folder = self.comp_output_folder if self.comp_save_custom.isChecked() else os.path.dirname(fw.file_path)
+            output_file = os.path.join(folder, f"{base}_сжатое.mp4")
+
+            thread = threading.Thread(
+                target=self._comp_worker,
+                args=(fw.file_path, output_file, crf, preset_en, audio_br, signals, fw.cancel_event),
+                daemon=True
+            )
+            thread.start()
+
+        self._comp_log_msg(f"⏳ Запущено задач: {len(pending)} (макс. параллельно: {self.MAX_PARALLEL})")
+
+    def _comp_worker(self, input_file, output_file, crf, preset, audio_br, signals, cancel_event):
+        self._task_semaphore.acquire()
+        try:
+            if cancel_event.is_set():
+                signals.finished.emit(False, input_file)
+                return
+
+            signals.log.emit(f"▶ Сжатие: {os.path.basename(input_file)}")
+
             def progress_cb(p):
-                signals.progress.emit(p)
-            
-            try:
-                preset_en = self.PRESETS.get(self.comp_preset.currentText(), "medium")
-                ok = self.converter.compress_mp4_video(
-                    input_file=self.comp_input_file,
-                    output_file=output_file,
-                    crf=self.comp_crf_slider.value(),
-                    preset=preset_en,
-                    audio_bitrate=self.comp_audio.currentText(),
-                    show_progress=True,
-                    progress_callback=progress_cb,
-                )
-                signals.finished.emit(ok)
-            except Exception as e:
-                signals.error.emit(str(e))
-                signals.finished.emit(False)
-        
-        threading.Thread(target=worker, daemon=True).start()
-    
-    def _comp_update_progress(self, value):
-        self.comp_progress.setValue(value)
-        self.comp_progress_label.setText(f"{value}%")
-    
-    def _comp_finished(self, success):
+                signals.progress.emit(p, input_file)
+
+            ok = self.converter.compress_mp4_video(
+                input_file=input_file,
+                output_file=output_file,
+                crf=crf,
+                preset=preset,
+                audio_bitrate=audio_br,
+                show_progress=True,
+                progress_callback=progress_cb,
+                cancel_event=cancel_event,
+            )
+            signals.finished.emit(ok, input_file)
+        except Exception as e:
+            signals.log.emit(f"❌ Ошибка ({os.path.basename(input_file)}): {e}")
+            signals.finished.emit(False, input_file)
+        finally:
+            self._task_semaphore.release()
+
+    def _comp_update_progress(self, value, file_path):
+        fw = self.comp_file_widgets.get(file_path)
+        if fw and fw.state == FileTaskWidget.RUNNING:
+            fw.set_progress(value)
+
+    def _comp_task_finished(self, success, file_path):
+        fw = self.comp_file_widgets.get(file_path)
+        if not fw:
+            return
         t = THEMES[self.current_theme]
-        self.comp_run_btn.setEnabled(True)
-        if success:
-            self.comp_status.setText("✅ Готово!")
-            self.comp_status.setStyleSheet(f"color: {t['success']}; font-size: 18px; font-weight: bold;")
+        name = os.path.basename(file_path)
+        if fw.state == FileTaskWidget.CANCELLED:
+            self._comp_log_msg(f"❌ Отменено: {name}")
+        elif success:
+            fw.set_state(FileTaskWidget.FINISHED)
+            self._comp_log_msg(f"✅ Готово: {name}")
         else:
-            self.comp_status.setText("❌ Ошибка")
-            self.comp_status.setStyleSheet(f"color: {t['error']}; font-size: 18px; font-weight: bold;")
+            fw.set_state(FileTaskWidget.ERROR)
+            self._comp_log_msg(f"⚠️ Ошибка: {name}")
+        fw.apply_theme(t, self.current_theme == "dark")
 
 
+# ═══════════════════════════════════════════════════════════════════
 def main():
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    
+    app.setFont(QFont("Segoe UI", 11))
     window = VideoProcessorApp()
     window.show()
-    
     sys.exit(app.exec())
 
 
