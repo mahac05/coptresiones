@@ -8,6 +8,7 @@
 
 import sys
 import os
+import logging
 import threading
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -19,6 +20,15 @@ from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QObje
 from PyQt6.QtGui import QFont, QColor, QIcon, QFontMetrics, QDragEnterEvent, QDropEvent
 
 from backend import FFmpegConverter
+from core.models import ConversionRequest, CompressionRequest, JobResult
+from core.settings import (
+    TOOLTIPS, PRESETS, get_crf_description,
+    DEFAULT_AUDIO_FORMAT, DEFAULT_AUDIO_BITRATE, DEFAULT_CRF,
+    DEFAULT_PRESET_RU, DEFAULT_COMP_AUDIO_BITRATE,
+    AUDIO_BITRATE_OPTIONS, COMP_AUDIO_BITRATE_OPTIONS,
+    MAX_PARALLEL_TASKS,
+)
+from core.service import ProcessingService
 
 
 # ─── Темы ───────────────────────────────────────────────────────────
@@ -68,10 +78,10 @@ THEMES = {
 
 # ─── Сигналы для thread-safe обновления UI ──────────────────────────
 class WorkerSignals(QObject):
-    progress = pyqtSignal(int, str)   # percent, file_path
-    finished = pyqtSignal(bool, str)  # success, file_path
-    error = pyqtSignal(str, str)      # error_msg, file_path
-    log = pyqtSignal(str)             # log message
+    progress = pyqtSignal(int, str)      # percent, file_path
+    finished = pyqtSignal(object, str)   # JobResult, file_path
+    error = pyqtSignal(str, str)         # error_msg, file_path
+    log = pyqtSignal(str)                # log message
 
 
 # ─── Виджет одного файла в очереди ──────────────────────────────────
@@ -281,75 +291,16 @@ def elide_path(path: str, max_chars: int = 45) -> str:
 class VideoProcessorApp(QMainWindow):
     """Главное окно приложения."""
 
-    # Подсказки для технических терминов
-    TOOLTIPS = {
-        "format": (
-            "Формат выходного аудио файла:\n\n"
-            "• M4A — для Apple устройств (iPhone, iTunes)\n"
-            "• MP3 — универсальный, работает везде\n"
-            "• WAV — без сжатия (очень большой файл)\n"
-            "• FLAC — без потерь качества\n"
-            "• OGG — открытый формат"
-        ),
-        "bitrate": (
-            "Качество звука (битрейт):\n\n"
-            "• 128k — среднее качество (маленький файл)\n"
-            "• 192k — хорошее качество (рекомендуется)\n"
-            "• 320k — отличное качество (большой файл)\n\n"
-            "Чем выше число — тем лучше звук, но больше файл."
-        ),
-        "crf": (
-            "Качество видео (CRF — Constant Rate Factor):\n\n"
-            "• 18-20 — Почти без потерь (большой файл)\n"
-            "• 23 — Стандартное качество (рекомендуется)\n"
-            "• 28 — Хорошее сжатие (файл меньше)\n"
-            "• 32+ — Сильное сжатие (качество падает)\n\n"
-            "Чем меньше число — тем лучше качество, но больше файл."
-        ),
-        "preset": (
-            "Скорость сжатия:\n\n"
-            "Чем медленнее — тем меньше итоговый файл\n"
-            "(при одинаковом качестве картинки).\n\n"
-            "• Мгновенно — очень быстро, большой файл\n"
-            "• Стандарт — баланс скорости и размера\n"
-            "• Медленно — долго, но файл компактнее\n"
-            "• Максимальное сжатие — очень долго, минимальный размер"
-        ),
-        "audio_bitrate": (
-            "Качество звука в видео:\n\n"
-            "• 96k — низкое качество\n"
-            "• 128k — стандартное (рекомендуется)\n"
-            "• 192k — хорошее качество\n"
-            "• 256k — высокое качество"
-        ),
-    }
-
-    # Полный набор пресетов скорости (9 штук)
-    PRESETS = {
-        "Мгновенно": "ultrafast",
-        "Очень быстро": "superfast",
-        "Быстро": "veryfast",
-        "Быстрее": "faster",
-        "Чуть быстрее": "fast",
-        "Стандарт": "medium",
-        "Медленно": "slow",
-        "Очень медленно": "slower",
-        "Максимальное сжатие": "veryslow",
-    }
-
-    MAX_PARALLEL = 4
-
     def __init__(self):
         super().__init__()
-        self.converter = FFmpegConverter()
         self.current_theme = "dark"
+
+        # Сервис обработки — заменяет thread-per-file + Semaphore
+        self._service = ProcessingService(max_workers=MAX_PARALLEL_TASKS)
 
         # Списки файлов и виджетов для каждой вкладки
         self.conv_file_widgets: dict[str, FileTaskWidget] = {}
         self.comp_file_widgets: dict[str, FileTaskWidget] = {}
-
-        # Семафор для ограничения параллельных задач
-        self._task_semaphore = threading.Semaphore(self.MAX_PARALLEL)
 
         # Списки help-label для тем
         self._help_labels: list[HelpLabel] = []
@@ -721,7 +672,7 @@ class VideoProcessorApp(QMainWindow):
 
     # ─── Вспомогательные ────────────────────────────────────────────
     def _make_help(self, key: str) -> HelpLabel:
-        hl = HelpLabel(self.TOOLTIPS[key])
+        hl = HelpLabel(TOOLTIPS[key])
         self._help_labels.append(hl)
         return hl
 
@@ -784,7 +735,7 @@ class VideoProcessorApp(QMainWindow):
 
         self.conv_format = QComboBox()
         self.conv_format.addItems(list(FFmpegConverter.AUDIO_FORMATS.keys()))
-        self.conv_format.setCurrentText("m4a")
+        self.conv_format.setCurrentText(DEFAULT_AUDIO_FORMAT)
         format_layout.addWidget(self.conv_format)
         format_layout.addSpacing(35)
 
@@ -793,8 +744,8 @@ class VideoProcessorApp(QMainWindow):
         format_layout.addWidget(self._make_help("bitrate"))
 
         self.conv_bitrate = QComboBox()
-        self.conv_bitrate.addItems(["96k", "128k", "192k", "256k", "320k"])
-        self.conv_bitrate.setCurrentText("192k")
+        self.conv_bitrate.addItems(AUDIO_BITRATE_OPTIONS)
+        self.conv_bitrate.setCurrentText(DEFAULT_AUDIO_BITRATE)
         format_layout.addWidget(self.conv_bitrate)
         format_layout.addStretch()
 
@@ -893,8 +844,6 @@ class VideoProcessorApp(QMainWindow):
         self.conv_log.append(msg)
 
     def _conv_run(self):
-        t = THEMES[self.current_theme]
-
         # Собираем файлы в ожидании
         pending = [fw for fw in self.conv_file_widgets.values() if fw.state == FileTaskWidget.PENDING]
         if not pending:
@@ -908,7 +857,7 @@ class VideoProcessorApp(QMainWindow):
         ext = self.conv_format.currentText()
         bitrate = self.conv_bitrate.currentText()
 
-        # Сигналы
+        # Сигналы для thread-safe обновления UI
         signals = WorkerSignals()
         signals.progress.connect(self._conv_update_progress)
         signals.finished.connect(self._conv_task_finished)
@@ -923,49 +872,29 @@ class VideoProcessorApp(QMainWindow):
             folder = self.conv_output_folder if self.conv_save_custom.isChecked() else os.path.dirname(fw.file_path)
             output_file = os.path.join(folder, f"{base}.{ext}")
 
-            thread = threading.Thread(
-                target=self._conv_worker,
-                args=(fw.file_path, output_file, ext, bitrate, signals, fw.cancel_event),
-                daemon=True
-            )
-            thread.start()
-
-        self._conv_log_msg(f"⏳ Запущено задач: {len(pending)} (макс. параллельно: {self.MAX_PARALLEL})")
-
-    def _conv_worker(self, input_file, output_file, fmt, bitrate, signals, cancel_event):
-        self._task_semaphore.acquire()
-        try:
-            if cancel_event.is_set():
-                signals.finished.emit(False, input_file)
-                return
-
-            signals.log.emit(f"▶ Конвертация: {os.path.basename(input_file)}")
-
-            def progress_cb(p):
-                signals.progress.emit(p, input_file)
-
-            ok = self.converter.convert_mp4_to_audio(
-                input_file=input_file,
-                output_format=fmt,
-                bitrate=bitrate,
+            request = ConversionRequest(
+                input_file=fw.file_path,
                 output_file=output_file,
-                show_progress=True,
-                progress_callback=progress_cb,
-                cancel_event=cancel_event,
+                output_format=ext,
+                bitrate=bitrate,
             )
-            signals.finished.emit(ok, input_file)
-        except Exception as e:
-            signals.log.emit(f"❌ Ошибка ({os.path.basename(input_file)}): {e}")
-            signals.finished.emit(False, input_file)
-        finally:
-            self._task_semaphore.release()
+
+            self._service.submit_conversion(
+                request=request,
+                cancel_event=fw.cancel_event,
+                on_progress=lambda p, fp: signals.progress.emit(p, fp),
+                on_finished=lambda result, fp: signals.finished.emit(result, fp),
+                on_log=lambda msg: signals.log.emit(msg),
+            )
+
+        self._conv_log_msg(f"⏳ Запущено задач: {len(pending)} (макс. параллельно: {self._service.max_workers})")
 
     def _conv_update_progress(self, value, file_path):
         fw = self.conv_file_widgets.get(file_path)
         if fw and fw.state == FileTaskWidget.RUNNING:
             fw.set_progress(value)
 
-    def _conv_task_finished(self, success, file_path):
+    def _conv_task_finished(self, result, file_path):
         fw = self.conv_file_widgets.get(file_path)
         if not fw:
             return
@@ -973,12 +902,13 @@ class VideoProcessorApp(QMainWindow):
         name = os.path.basename(file_path)
         if fw.state == FileTaskWidget.CANCELLED:
             self._conv_log_msg(f"❌ Отменено: {name}")
-        elif success:
+        elif isinstance(result, JobResult) and result.ok:
             fw.set_state(FileTaskWidget.FINISHED)
-            self._conv_log_msg(f"✅ Готово: {name}")
+            self._conv_log_msg(f"✅ Готово: {name} ({result.duration_ms}мс)")
         else:
             fw.set_state(FileTaskWidget.ERROR)
-            self._conv_log_msg(f"⚠️ Ошибка: {name}")
+            error_detail = result.error_message if isinstance(result, JobResult) else ""
+            self._conv_log_msg(f"⚠️ Ошибка: {name}" + (f" — {error_detail}" if error_detail else ""))
         fw.apply_theme(t, self.current_theme == "dark")
 
     # ==================== СЖАТИЕ ====================
@@ -1049,8 +979,8 @@ class VideoProcessorApp(QMainWindow):
         preset_layout.addWidget(self._make_help("preset"))
 
         self.comp_preset = QComboBox()
-        self.comp_preset.addItems(list(self.PRESETS.keys()))
-        self.comp_preset.setCurrentText("Стандарт")
+        self.comp_preset.addItems(list(PRESETS.keys()))
+        self.comp_preset.setCurrentText(DEFAULT_PRESET_RU)
         preset_layout.addWidget(self.comp_preset)
         preset_layout.addSpacing(35)
 
@@ -1059,8 +989,8 @@ class VideoProcessorApp(QMainWindow):
         preset_layout.addWidget(self._make_help("audio_bitrate"))
 
         self.comp_audio = QComboBox()
-        self.comp_audio.addItems(["96k", "128k", "192k", "256k"])
-        self.comp_audio.setCurrentText("128k")
+        self.comp_audio.addItems(COMP_AUDIO_BITRATE_OPTIONS)
+        self.comp_audio.setCurrentText(DEFAULT_COMP_AUDIO_BITRATE)
         preset_layout.addWidget(self.comp_audio)
         preset_layout.addStretch()
 
@@ -1141,15 +1071,8 @@ class VideoProcessorApp(QMainWindow):
             self.comp_file_scroll.setMaximumHeight(min(200, max(0, count * 54 + 10)))
 
     def _comp_crf_changed(self, value):
-        if value <= 20:
-            desc = "высокое качество"
-        elif value <= 25:
-            desc = "стандартное"
-        elif value <= 30:
-            desc = "хорошее сжатие"
-        else:
-            desc = "сильное сжатие"
-        self.comp_crf_value.setText(f"{value} ({desc})")
+        desc = get_crf_description(value)
+        self.comp_crf_value.setText(f"{value} {desc}")
 
     def _comp_save_mode_changed(self, checked):
         self.comp_folder_btn.setVisible(checked)
@@ -1169,8 +1092,6 @@ class VideoProcessorApp(QMainWindow):
         self.comp_log.append(msg)
 
     def _comp_run(self):
-        t = THEMES[self.current_theme]
-
         pending = [fw for fw in self.comp_file_widgets.values() if fw.state == FileTaskWidget.PENDING]
         if not pending:
             self._comp_log_msg("⚠️ Нет файлов для сжатия!")
@@ -1182,7 +1103,7 @@ class VideoProcessorApp(QMainWindow):
 
         crf = self.comp_crf_slider.value()
         preset_ru = self.comp_preset.currentText()
-        preset_en = self.PRESETS.get(preset_ru, "medium")
+        preset_en = PRESETS.get(preset_ru, "medium")
         audio_br = self.comp_audio.currentText()
 
         signals = WorkerSignals()
@@ -1199,50 +1120,30 @@ class VideoProcessorApp(QMainWindow):
             folder = self.comp_output_folder if self.comp_save_custom.isChecked() else os.path.dirname(fw.file_path)
             output_file = os.path.join(folder, f"{base}_сжатое.mp4")
 
-            thread = threading.Thread(
-                target=self._comp_worker,
-                args=(fw.file_path, output_file, crf, preset_en, audio_br, signals, fw.cancel_event),
-                daemon=True
-            )
-            thread.start()
-
-        self._comp_log_msg(f"⏳ Запущено задач: {len(pending)} (макс. параллельно: {self.MAX_PARALLEL})")
-
-    def _comp_worker(self, input_file, output_file, crf, preset, audio_br, signals, cancel_event):
-        self._task_semaphore.acquire()
-        try:
-            if cancel_event.is_set():
-                signals.finished.emit(False, input_file)
-                return
-
-            signals.log.emit(f"▶ Сжатие: {os.path.basename(input_file)}")
-
-            def progress_cb(p):
-                signals.progress.emit(p, input_file)
-
-            ok = self.converter.compress_mp4_video(
-                input_file=input_file,
+            request = CompressionRequest(
+                input_file=fw.file_path,
                 output_file=output_file,
                 crf=crf,
-                preset=preset,
+                preset=preset_en,
                 audio_bitrate=audio_br,
-                show_progress=True,
-                progress_callback=progress_cb,
-                cancel_event=cancel_event,
             )
-            signals.finished.emit(ok, input_file)
-        except Exception as e:
-            signals.log.emit(f"❌ Ошибка ({os.path.basename(input_file)}): {e}")
-            signals.finished.emit(False, input_file)
-        finally:
-            self._task_semaphore.release()
+
+            self._service.submit_compression(
+                request=request,
+                cancel_event=fw.cancel_event,
+                on_progress=lambda p, fp: signals.progress.emit(p, fp),
+                on_finished=lambda result, fp: signals.finished.emit(result, fp),
+                on_log=lambda msg: signals.log.emit(msg),
+            )
+
+        self._comp_log_msg(f"⏳ Запущено задач: {len(pending)} (макс. параллельно: {self._service.max_workers})")
 
     def _comp_update_progress(self, value, file_path):
         fw = self.comp_file_widgets.get(file_path)
         if fw and fw.state == FileTaskWidget.RUNNING:
             fw.set_progress(value)
 
-    def _comp_task_finished(self, success, file_path):
+    def _comp_task_finished(self, result, file_path):
         fw = self.comp_file_widgets.get(file_path)
         if not fw:
             return
@@ -1250,17 +1151,22 @@ class VideoProcessorApp(QMainWindow):
         name = os.path.basename(file_path)
         if fw.state == FileTaskWidget.CANCELLED:
             self._comp_log_msg(f"❌ Отменено: {name}")
-        elif success:
+        elif isinstance(result, JobResult) and result.ok:
             fw.set_state(FileTaskWidget.FINISHED)
-            self._comp_log_msg(f"✅ Готово: {name}")
+            self._comp_log_msg(f"✅ Готово: {name} ({result.duration_ms}мс)")
         else:
             fw.set_state(FileTaskWidget.ERROR)
-            self._comp_log_msg(f"⚠️ Ошибка: {name}")
+            error_detail = result.error_message if isinstance(result, JobResult) else ""
+            self._comp_log_msg(f"⚠️ Ошибка: {name}" + (f" — {error_detail}" if error_detail else ""))
         fw.apply_theme(t, self.current_theme == "dark")
 
 
 # ═══════════════════════════════════════════════════════════════════
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 11))
     window = VideoProcessorApp()

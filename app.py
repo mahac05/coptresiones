@@ -9,76 +9,28 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
 import os
+import logging
 
 from backend import FFmpegConverter
 from ui_components import ToolTip, create_help_label
+from core.models import ConversionRequest, CompressionRequest, JobResult
+from core.settings import (
+    TOOLTIPS, PRESETS, get_crf_description,
+    DEFAULT_AUDIO_FORMAT, DEFAULT_AUDIO_BITRATE, DEFAULT_CRF,
+    DEFAULT_PRESET_RU, DEFAULT_COMP_AUDIO_BITRATE,
+    AUDIO_BITRATE_OPTIONS, COMP_AUDIO_BITRATE_OPTIONS,
+    MAX_PARALLEL_TASKS,
+)
+from core.service import ProcessingService
 
 
 class VideoProcessorApp:
     """Главное окно приложения с вкладками."""
 
-    # Подсказки для технических терминов
-    TOOLTIPS = {
-        # Конвертация
-        "format": (
-            "Формат выходного аудио файла:\n\n"
-            "• M4A — для Apple устройств (iPhone, iTunes)\n"
-            "• MP3 — универсальный, работает везде\n"
-            "• WAV — без сжатия (очень большой файл)\n"
-            "• FLAC — без потерь качества\n"
-            "• OGG — открытый формат"
-        ),
-        "bitrate": (
-            "Качество звука (битрейт):\n\n"
-            "• 128k — среднее качество (маленький файл)\n"
-            "• 192k — хорошее качество (рекомендуется)\n"
-            "• 320k — отличное качество (большой файл)\n\n"
-            "Чем выше число — тем лучше звук, но больше файл."
-        ),
-        # Сжатие
-        "crf": (
-            "Качество видео (CRF — Constant Rate Factor):\n\n"
-            "• 18-20 — Почти без потерь (большой файл)\n"
-            "• 23 — Стандартное качество (рекомендуется)\n"
-            "• 28 — Хорошее сжатие (файл меньше)\n"
-            "• 32+ — Сильное сжатие (качество падает)\n\n"
-            "Чем меньше число — тем лучше качество, но больше файл."
-        ),
-        "preset": (
-            "Скорость сжатия:\n\n"
-            "Чем медленнее — тем меньше итоговый файл\n"
-            "(при одинаковом качестве картинки).\n\n"
-            "• Мгновенно — очень быстро, большой файл\n"
-            "• Стандарт — баланс скорости и размера\n"
-            "• Медленно — долго, но файл компактнее\n"
-            "• Максимальное сжатие — очень долго, минимальный размер"
-        ),
-        "audio_bitrate": (
-            "Качество звука в видео:\n\n"
-            "• 96k — низкое качество\n"
-            "• 128k — стандартное (рекомендуется)\n"
-            "• 192k — хорошее качество\n"
-            "• 256k — высокое качество"
-        ),
-    }
-
-    # Пресеты сжатия на русском
-    PRESETS = {
-        "Мгновенно": "ultrafast",
-        "Очень быстро": "superfast",
-        "Быстро": "veryfast",
-        "Быстрее": "faster",
-        "Чуть быстрее": "fast",
-        "Стандарт": "medium",
-        "Медленно": "slow",
-        "Очень медленно": "slower",
-        "Максимальное сжатие": "veryslow",
-    }
-
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("🎬 Видео Обработчик")
-        self.converter = FFmpegConverter()
+        self._service = ProcessingService(max_workers=MAX_PARALLEL_TASKS)
         self._build_ui()
 
     def _build_ui(self):
@@ -208,7 +160,7 @@ class VideoProcessorApp:
         format_container = ttk.Frame(audio_frame)
         format_container.grid(row=0, column=0, sticky="w", **pad)
         ttk.Label(format_container, text="Формат:").pack(side="left")
-        create_help_label(format_container, self.TOOLTIPS["format"]).pack(side="left", padx=(2, 8))
+        create_help_label(format_container, TOOLTIPS["format"]).pack(side="left", padx=(2, 8))
 
         ttk.Combobox(
             audio_frame, textvariable=self.conv_format_var,
@@ -220,11 +172,11 @@ class VideoProcessorApp:
         bitrate_container = ttk.Frame(audio_frame)
         bitrate_container.grid(row=0, column=2, sticky="w", **pad)
         ttk.Label(bitrate_container, text="Битрейт:").pack(side="left")
-        create_help_label(bitrate_container, self.TOOLTIPS["bitrate"]).pack(side="left", padx=(2, 8))
+        create_help_label(bitrate_container, TOOLTIPS["bitrate"]).pack(side="left", padx=(2, 8))
 
         ttk.Combobox(
             audio_frame, textvariable=self.conv_bitrate_var,
-            values=["96k", "128k", "192k", "256k", "320k"],
+            values=AUDIO_BITRATE_OPTIONS,
             width=10
         ).grid(row=0, column=3, sticky="w", **pad)
 
@@ -289,16 +241,14 @@ class VideoProcessorApp:
             messagebox.showwarning("Файл не выбран", "Пожалуйста, выберите входной видео файл.")
             return
 
-        # Формируем путь к выходному файлу
         ext = self.conv_format_var.get()
         base_name = os.path.splitext(os.path.basename(input_file))[0]
         
+        output_file = ""
         if self.conv_save_mode.get() == "same_folder":
-            # Сохраняем в той же папке с тем же именем
             folder = os.path.dirname(input_file)
             output_file = os.path.join(folder, f"{base_name}.{ext}")
         else:
-            # Пользовательская папка
             custom_folder = self.conv_output_var.get().strip()
             if not custom_folder:
                 messagebox.showwarning("Папка не выбрана", "Пожалуйста, выберите папку для сохранения.")
@@ -311,30 +261,34 @@ class VideoProcessorApp:
         self.conv_log_text.delete("1.0", "end")
         self._conv_log("⏳ Начинаем конвертацию...")
 
+        request = ConversionRequest(
+            input_file=input_file,
+            output_file=output_file,
+            output_format=self.conv_format_var.get(),
+            bitrate=self.conv_bitrate_var.get()
+        )
+
         def progress_callback(percent: int):
             self.root.after(0, lambda: self._conv_set_progress(percent))
 
-        def worker():
-            try:
-                ok = self.converter.convert_mp4_to_audio(
-                    input_file=input_file,
-                    output_format=self.conv_format_var.get(),
-                    bitrate=self.conv_bitrate_var.get(),
-                    output_file=output_file,
-                    show_progress=True,
-                    progress_callback=progress_callback,
-                )
+        def result_callback(job_result: JobResult):
+            if job_result.ok:
+                self.root.after(0, lambda: self._conv_log(f"✅ Готово! Файл успешно создан ({job_result.duration_ms}мс)."))
+                self.root.after(0, lambda: self.conv_status_label.configure(text="✅ Готово"))
+            else:
+                msg = job_result.error_message if job_result.error_message else "Неизвестная ошибка при конвертации"
+                self.root.after(0, lambda: self._conv_log(f"❌ {msg}"))
+                self.root.after(0, lambda: self.conv_status_label.configure(text="❌ Ошибка"))
+            self.root.after(0, lambda: self.conv_run_btn.configure(state="normal"))
 
-                if ok:
-                    self.root.after(0, lambda: self._conv_log("✅ Готово! Файл успешно создан."))
-                    self.root.after(0, lambda: self.conv_status_label.configure(text="✅ Готово"))
-                else:
-                    self.root.after(0, lambda: self._conv_log("❌ Ошибка при конвертации."))
-                    self.root.after(0, lambda: self.conv_status_label.configure(text="❌ Ошибка"))
-            finally:
-                self.root.after(0, lambda: self.conv_run_btn.configure(state="normal"))
+        cancel_event = threading.Event()
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._service.submit_conversion(
+            request=request,
+            cancel_event=cancel_event,
+            on_progress=lambda p, fp: progress_callback(p),
+            on_finished=lambda result, fp: result_callback(result),
+        )
 
     # ==================== СЖАТИЕ ====================
 
@@ -345,9 +299,9 @@ class VideoProcessorApp:
         # Переменные
         self.comp_input_var = tk.StringVar()
         self.comp_output_var = tk.StringVar()
-        self.comp_crf_var = tk.IntVar(value=23)
-        self.comp_preset_var = tk.StringVar(value="Стандарт")
-        self.comp_audio_bitrate_var = tk.StringVar(value="128k")
+        self.comp_crf_var = tk.IntVar(value=DEFAULT_CRF)
+        self.comp_preset_var = tk.StringVar(value=DEFAULT_PRESET_RU)
+        self.comp_audio_bitrate_var = tk.StringVar(value=DEFAULT_COMP_AUDIO_BITRATE)
 
         pad = {"padx": 10, "pady": 6}
 
@@ -398,7 +352,7 @@ class VideoProcessorApp:
         crf_container = ttk.Frame(compress_settings)
         crf_container.grid(row=0, column=0, sticky="w", **pad)
         ttk.Label(crf_container, text="Качество:").pack(side="left")
-        create_help_label(crf_container, self.TOOLTIPS["crf"]).pack(side="left", padx=(2, 8))
+        create_help_label(crf_container, TOOLTIPS["crf"]).pack(side="left", padx=(2, 8))
 
         crf_slider_frame = ttk.Frame(compress_settings)
         crf_slider_frame.grid(row=0, column=1, columnspan=2, sticky="ew", **pad)
@@ -409,21 +363,21 @@ class VideoProcessorApp:
         )
         self.comp_crf_scale.pack(side="left", fill="x", expand=True)
 
-        self.comp_crf_label = ttk.Label(crf_slider_frame, text="23", width=4, anchor="center")
+        self.comp_crf_label = ttk.Label(crf_slider_frame, text=str(DEFAULT_CRF), width=4, anchor="center")
         self.comp_crf_label.pack(side="left", padx=5)
 
-        self.comp_crf_desc = ttk.Label(crf_slider_frame, text="(стандартное)", foreground="#666666")
+        self.comp_crf_desc = ttk.Label(crf_slider_frame, text=get_crf_description(DEFAULT_CRF), foreground="#666666")
         self.comp_crf_desc.pack(side="left", padx=5)
 
         # Скорость (Preset)
         preset_container = ttk.Frame(compress_settings)
         preset_container.grid(row=1, column=0, sticky="w", **pad)
         ttk.Label(preset_container, text="Скорость:").pack(side="left")
-        create_help_label(preset_container, self.TOOLTIPS["preset"]).pack(side="left", padx=(2, 8))
+        create_help_label(preset_container, TOOLTIPS["preset"]).pack(side="left", padx=(2, 8))
 
         ttk.Combobox(
             compress_settings, textvariable=self.comp_preset_var,
-            values=list(self.PRESETS.keys()),
+            values=list(PRESETS.keys()),
             width=22, state="readonly"
         ).grid(row=1, column=1, sticky="w", **pad)
 
@@ -431,11 +385,11 @@ class VideoProcessorApp:
         audio_container = ttk.Frame(compress_settings)
         audio_container.grid(row=1, column=2, sticky="w", **pad)
         ttk.Label(audio_container, text="Звук:").pack(side="left")
-        create_help_label(audio_container, self.TOOLTIPS["audio_bitrate"]).pack(side="left", padx=(2, 8))
+        create_help_label(audio_container, TOOLTIPS["audio_bitrate"]).pack(side="left", padx=(2, 8))
 
         ttk.Combobox(
             compress_settings, textvariable=self.comp_audio_bitrate_var,
-            values=["96k", "128k", "192k", "256k"],
+            values=COMP_AUDIO_BITRATE_OPTIONS,
             width=10, state="readonly"
         ).grid(row=1, column=3, sticky="w", **pad)
 
@@ -471,16 +425,7 @@ class VideoProcessorApp:
     def _comp_update_crf_label(self, *_):
         crf = int(self.comp_crf_var.get())
         self.comp_crf_label.configure(text=str(crf))
-
-        if crf <= 20:
-            desc = "(высокое качество)"
-        elif crf <= 25:
-            desc = "(стандартное)"
-        elif crf <= 30:
-            desc = "(хорошее сжатие)"
-        else:
-            desc = "(сильное сжатие)"
-        self.comp_crf_desc.configure(text=desc)
+        self.comp_crf_desc.configure(text=get_crf_description(crf))
 
     def _comp_browse_input(self):
         path = filedialog.askopenfilename(
@@ -547,9 +492,9 @@ class VideoProcessorApp:
         def worker():
             try:
                 preset_ru = self.comp_preset_var.get()
-                preset_en = self.PRESETS.get(preset_ru, "medium")
+                preset_en = PRESETS.get(preset_ru, "medium")
 
-                ok = self.converter.compress_mp4_video(
+                result = self._service.converter.compress_mp4_video(
                     input_file=input_file,
                     output_file=output_file,
                     crf=int(self.comp_crf_var.get()),
@@ -559,11 +504,12 @@ class VideoProcessorApp:
                     progress_callback=progress_callback,
                 )
 
-                if ok:
-                    self.root.after(0, lambda: self._comp_log("✅ Готово! Видео успешно сжато."))
+                if result.ok:
+                    self.root.after(0, lambda: self._comp_log(f"✅ Готово! Видео успешно сжато ({result.duration_ms}мс)."))
                     self.root.after(0, lambda: self.comp_status_label.configure(text="✅ Готово"))
                 else:
-                    self.root.after(0, lambda: self._comp_log("❌ Ошибка при сжатии видео."))
+                    msg = result.error_message if result.error_message else "Ошибка при сжатии"
+                    self.root.after(0, lambda: self._comp_log(f"❌ {msg}"))
                     self.root.after(0, lambda: self.comp_status_label.configure(text="❌ Ошибка"))
             finally:
                 self.root.after(0, lambda: self.comp_run_btn.configure(state="normal"))
@@ -572,6 +518,10 @@ class VideoProcessorApp:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     root = tk.Tk()
     app = VideoProcessorApp(root)
     root.mainloop()
