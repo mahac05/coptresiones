@@ -6,7 +6,7 @@
 """
 
 import pytest
-from backend import build_conversion_command, build_compression_command, build_lecture_compression_command
+from backend import build_conversion_command, build_compression_command, build_lecture_compression_command, build_compression_command_qsv
 
 
 class TestBuildConversionCommand:
@@ -182,4 +182,48 @@ class TestBuildLectureCompressionCommand:
         assert cmd[cmd.index("-r") + 1] == "5"
         assert cmd[cmd.index("-crf") + 1] == "28"
         assert cmd[cmd.index("-preset") + 1] == "slow"
+        assert cmd[cmd.index("-b:a") + 1] == "96k"
+
+
+class TestBuildCompressionCommandQsv:
+    """Тесты для build_compression_command_qsv."""
+
+    def test_uses_qsv_codec(self):
+        cmd = build_compression_command_qsv(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            global_quality=23,
+            preset="medium",
+            audio_bitrate="128k",
+        )
+        assert cmd[0] == "ffmpeg"
+        assert "-c:v" in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "h264_qsv"
+
+    def test_hwaccel_qsv(self):
+        cmd = build_compression_command_qsv(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            global_quality=23,
+            preset="medium",
+            audio_bitrate="128k",
+        )
+        assert "-hwaccel" in cmd
+        assert cmd[cmd.index("-hwaccel") + 1] == "qsv"
+
+    def test_global_quality(self):
+        cmd = build_compression_command_qsv(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            global_quality=28,
+            preset="fast",
+            audio_bitrate="96k",
+        )
+        assert "-global_quality" in cmd
+        assert cmd[cmd.index("-global_quality") + 1] == "28"
+        assert "-crf" not in cmd
+        assert cmd[cmd.index("-preset") + 1] == "fast"
         assert cmd[cmd.index("-b:a") + 1] == "96k"

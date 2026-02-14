@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QSlider, QProgressBar, QFrame,
     QStackedWidget, QFileDialog, QRadioButton, QButtonGroup,
-    QScrollArea, QTextEdit,
+    QScrollArea, QTextEdit, QCheckBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -28,11 +28,12 @@ from core.settings import (
     MAX_PARALLEL_TASKS,
     DEFAULT_LECTURE_CRF, DEFAULT_LECTURE_FPS, DEFAULT_LECTURE_AUDIO_BITRATE,
     LECTURE_FPS_OPTIONS, LECTURE_AUDIO_BITRATE_OPTIONS,
+    QSV_PRESETS,
 )
 from core.service import ProcessingService
 from core.themes import PYQT_THEMES as THEMES
 from ui_components_pyqt import (
-    WorkerSignals, FileTaskWidget, DropZone, HelpLabel, elide_path
+    WorkerSignals, FileTaskWidget, DropZone, HelpLabel, elide_path, format_duration
 )
 
 
@@ -667,7 +668,7 @@ class VideoProcessorApp(QMainWindow):
             self._conv_log_msg(f"❌ Отменено: {name}")
         elif isinstance(result, JobResult) and result.ok:
             fw.set_state(FileTaskWidget.FINISHED)
-            self._conv_log_msg(f"✅ Готово: {name} ({result.duration_ms}мс)")
+            self._conv_log_msg(f"✅ Готово: {name} ({format_duration(result.duration_ms)})")
         else:
             fw.set_state(FileTaskWidget.ERROR)
             error_detail = result.error_message if isinstance(result, JobResult) else ""
@@ -758,6 +759,16 @@ class VideoProcessorApp(QMainWindow):
         preset_layout.addStretch()
 
         card_layout.addLayout(preset_layout)
+
+        # GPU
+        gpu_layout = QHBoxLayout()
+        self.comp_gpu_checkbox = QCheckBox("🚀 GPU (Intel QSV)")
+        self.comp_gpu_checkbox.setToolTip(TOOLTIPS.get("gpu_qsv", ""))
+        self.comp_gpu_checkbox.stateChanged.connect(self._comp_gpu_toggled)
+        gpu_layout.addWidget(self.comp_gpu_checkbox)
+        gpu_layout.addWidget(self._make_help("gpu_qsv"))
+        gpu_layout.addStretch()
+        card_layout.addLayout(gpu_layout)
 
         # Сохранение
         save_label = QLabel("Сохранить:")
@@ -854,6 +865,24 @@ class VideoProcessorApp(QMainWindow):
     def _comp_log_msg(self, msg: str):
         self.comp_log.append(msg)
 
+    def _comp_gpu_toggled(self, state):
+        """При переключении GPU обновляет список пресетов."""
+        use_gpu = bool(state)
+        current_text = self.comp_preset.currentText()
+        self.comp_preset.clear()
+        if use_gpu:
+            self.comp_preset.addItems(list(QSV_PRESETS.keys()))
+            if current_text in QSV_PRESETS:
+                self.comp_preset.setCurrentText(current_text)
+            else:
+                self.comp_preset.setCurrentText("Стандарт")
+        else:
+            self.comp_preset.addItems(list(PRESETS.keys()))
+            if current_text in PRESETS:
+                self.comp_preset.setCurrentText(current_text)
+            else:
+                self.comp_preset.setCurrentText(DEFAULT_PRESET_RU)
+
     def _comp_run(self):
         pending = [fw for fw in self.comp_file_widgets.values() if fw.state == FileTaskWidget.PENDING]
         if not pending:
@@ -866,7 +895,9 @@ class VideoProcessorApp(QMainWindow):
 
         crf = self.comp_crf_slider.value()
         preset_ru = self.comp_preset.currentText()
-        preset_en = PRESETS.get(preset_ru, "medium")
+        use_gpu = self.comp_gpu_checkbox.isChecked()
+        presets_map = QSV_PRESETS if use_gpu else PRESETS
+        preset_en = presets_map.get(preset_ru, "medium")
         audio_br = self.comp_audio.currentText()
 
         signals = WorkerSignals()
@@ -889,6 +920,7 @@ class VideoProcessorApp(QMainWindow):
                 crf=crf,
                 preset=preset_en,
                 audio_bitrate=audio_br,
+                use_gpu=self.comp_gpu_checkbox.isChecked(),
             )
 
             self._service.submit_compression(
@@ -916,7 +948,7 @@ class VideoProcessorApp(QMainWindow):
             self._comp_log_msg(f"❌ Отменено: {name}")
         elif isinstance(result, JobResult) and result.ok:
             fw.set_state(FileTaskWidget.FINISHED)
-            self._comp_log_msg(f"✅ Готово: {name} ({result.duration_ms}мс)")
+            self._comp_log_msg(f"✅ Готово: {name} ({format_duration(result.duration_ms)})")
         else:
             fw.set_state(FileTaskWidget.ERROR)
             error_detail = result.error_message if isinstance(result, JobResult) else ""
@@ -1182,7 +1214,7 @@ class VideoProcessorApp(QMainWindow):
             self._lect_log_msg(f"❌ Отменено: {name}")
         elif isinstance(result, JobResult) and result.ok:
             fw.set_state(FileTaskWidget.FINISHED)
-            self._lect_log_msg(f"✅ Готово: {name} ({result.duration_ms}мс)")
+            self._lect_log_msg(f"✅ Готово: {name} ({format_duration(result.duration_ms)})")
         else:
             fw.set_state(FileTaskWidget.ERROR)
             error_detail = result.error_message if isinstance(result, JobResult) else ""

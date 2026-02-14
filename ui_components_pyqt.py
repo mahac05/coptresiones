@@ -4,6 +4,18 @@
 Переиспользуемые UI компоненты для PyQt6 приложения.
 """
 
+
+def format_duration(ms: int) -> str:
+    """Форматирует миллисекунды в человекочитаемую строку (напр. '23м 47с')."""
+    if ms < 1000:
+        return "<1с"
+    total_sec = ms // 1000
+    minutes = total_sec // 60
+    seconds = total_sec % 60
+    if minutes > 0:
+        return f"{minutes}м {seconds}с"
+    return f"{seconds}с"
+
 import os
 import threading
 from PyQt6.QtWidgets import (

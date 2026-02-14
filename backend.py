@@ -78,6 +78,38 @@ def build_compression_command(
     ]
 
 
+def build_compression_command_qsv(
+    ffmpeg_path: str,
+    input_file: str,
+    output_file: str,
+    global_quality: int,
+    preset: str,
+    audio_bitrate: str,
+) -> list[str]:
+    """
+    Строит команду ffmpeg для сжатия видео через Intel QSV (GPU).
+    Использует h264_qsv кодек и -global_quality вместо -crf.
+    Чистая функция — легко тестировать без запуска ffmpeg.
+    """
+    return [
+        ffmpeg_path,
+        "-hwaccel", "qsv",
+        "-i", input_file,
+        "-c:v", "h264_qsv",
+        "-global_quality", str(global_quality),
+        "-preset", preset,
+        "-c:a", "aac",
+        "-b:a", audio_bitrate,
+        "-movflags", "+faststart",
+        "-progress", "pipe:1",
+        "-nostats",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        output_file,
+    ]
+
+
 def build_lecture_compression_command(
     ffmpeg_path: str,
     input_file: str,
@@ -359,6 +391,7 @@ class FFmpegConverter:
         crf: int = 23,
         preset: str = "medium",
         audio_bitrate: str = "128k",
+        use_gpu: bool = False,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -366,10 +399,8 @@ class FFmpegConverter:
         """
         Сжимает MP4 видео (H.264) с использованием CRF.
 
-        CRF ориентиры:
-        - 18-23: Стандартное высокое качество (файл будет большим).
-        - 28: Хорошее сжатие (размер сильно падает, качество приемлемое).
-        - 32 и выше: Сильное сжатие (качество заметно падает).
+        Args:
+            use_gpu: если True, использует Intel QSV (h264_qsv) для GPU-ускорения
 
         Returns:
             JobResult с результатом операции
@@ -384,20 +415,31 @@ class FFmpegConverter:
             input_path = Path(input_file)
             output_file = str(input_path.parent / (input_path.stem + "_compressed.mp4"))
 
-        logger.info("Начинаем сжатие видео...")
+        encoder = "h264_qsv (GPU)" if use_gpu else "libx264 (CPU)"
+        logger.info(f"Начинаем сжатие видео [{encoder}]...")
         logger.info(f"Входной файл: {input_file}")
         logger.info(f"Выходной файл: {output_file}")
         logger.info(f"CRF: {crf}, preset: {preset}, audio: {audio_bitrate}")
 
         try:
-            command = build_compression_command(
-                ffmpeg_path=self.ffmpeg_path,
-                input_file=input_file,
-                output_file=output_file,
-                crf=crf,
-                preset=preset,
-                audio_bitrate=audio_bitrate,
-            )
+            if use_gpu:
+                command = build_compression_command_qsv(
+                    ffmpeg_path=self.ffmpeg_path,
+                    input_file=input_file,
+                    output_file=output_file,
+                    global_quality=crf,
+                    preset=preset,
+                    audio_bitrate=audio_bitrate,
+                )
+            else:
+                command = build_compression_command(
+                    ffmpeg_path=self.ffmpeg_path,
+                    input_file=input_file,
+                    output_file=output_file,
+                    crf=crf,
+                    preset=preset,
+                    audio_bitrate=audio_bitrate,
+                )
 
             duration_seconds = self._get_duration_seconds(input_file) if show_progress else None
 
