@@ -94,3 +94,15 @@ class CompressionRequest:
     crf: int = 23
     preset: str = "medium"
     audio_bitrate: str = "128k"
+
+
+@dataclass
+class LectureCompressionRequest:
+    """Запрос на сжатие видео-лекции (со слайдами)."""
+
+    input_file: str
+    output_file: str
+    crf: int = 24
+    preset: str = "medium"
+    audio_bitrate: str = "64k"
+    fps: int = 10

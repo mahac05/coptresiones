@@ -13,7 +13,7 @@ import queue
 from typing import Callable, Optional
 
 from backend import FFmpegConverter
-from core.models import JobResult, ConversionRequest, CompressionRequest
+from core.models import JobResult, ConversionRequest, CompressionRequest, LectureCompressionRequest
 from core.settings import MAX_PARALLEL_TASKS
 
 logger = logging.getLogger(__name__)
@@ -85,11 +85,6 @@ class ProcessingService:
     def max_workers(self) -> int:
         return self._max_workers
 
-    @property
-    def converter(self) -> FFmpegConverter:
-        """Public access to the underlying converter, for single-file UIs (tkinter)."""
-        return self._converter
-
     def submit_conversion(
         self,
         request: ConversionRequest,
@@ -133,6 +128,29 @@ class ProcessingService:
         """
         self._pool.submit(
             self._run_compression,
+            request, cancel_event, on_progress, on_finished, on_log,
+        )
+
+    def submit_lecture_compression(
+        self,
+        request: LectureCompressionRequest,
+        cancel_event: threading.Event,
+        on_progress: Optional[Callable[[int, str], None]] = None,
+        on_finished: Optional[Callable[[JobResult, str], None]] = None,
+        on_log: Optional[Callable[[str], None]] = None,
+    ):
+        """
+        Отправляет задачу сжатия лекции в пул.
+
+        Args:
+            request: параметры сжатия лекции
+            cancel_event: событие для отмены задачи
+            on_progress: callback(percent, file_path)
+            on_finished: callback(result, file_path)
+            on_log: callback(message)
+        """
+        self._pool.submit(
+            self._run_lecture_compression,
             request, cancel_event, on_progress, on_finished, on_log,
         )
 
@@ -220,6 +238,50 @@ class ProcessingService:
             )
         except Exception as e:
             logger.error(f"Ошибка сжатия ({file_name}): {e}")
+            result = JobResult.error("unknown", str(e))
+            if on_log:
+                on_log(f"❌ Ошибка ({file_name}): {e}")
+
+        if on_finished:
+            on_finished(result, request.input_file)
+
+    def _run_lecture_compression(
+        self,
+        request: LectureCompressionRequest,
+        cancel_event: threading.Event,
+        on_progress: Optional[Callable[[int, str], None]],
+        on_finished: Optional[Callable[[JobResult, str], None]],
+        on_log: Optional[Callable[[str], None]],
+    ):
+        file_name = os.path.basename(request.input_file)
+
+        if cancel_event.is_set():
+            result = JobResult.cancelled()
+            if on_finished:
+                on_finished(result, request.input_file)
+            return
+
+        if on_log:
+            on_log(f"▶ Сжатие лекции: {file_name}")
+
+        def progress_cb(percent: int):
+            if on_progress:
+                on_progress(percent, request.input_file)
+
+        try:
+            result = self._converter.compress_lecture(
+                input_file=request.input_file,
+                output_file=request.output_file,
+                crf=request.crf,
+                preset=request.preset,
+                audio_bitrate=request.audio_bitrate,
+                fps=request.fps,
+                show_progress=True,
+                progress_callback=progress_cb,
+                cancel_event=cancel_event,
+            )
+        except Exception as e:
+            logger.error(f"Ошибка сжатия лекции ({file_name}): {e}")
             result = JobResult.error("unknown", str(e))
             if on_log:
                 on_log(f"❌ Ошибка ({file_name}): {e}")

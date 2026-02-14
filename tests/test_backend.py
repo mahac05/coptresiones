@@ -6,7 +6,7 @@
 """
 
 import pytest
-from backend import build_conversion_command, build_compression_command
+from backend import build_conversion_command, build_compression_command, build_lecture_compression_command
 
 
 class TestBuildConversionCommand:
@@ -110,3 +110,76 @@ class TestBuildCompressionCommand:
         crf_value = cmd[cmd.index("-crf") + 1]
         assert isinstance(crf_value, str)
         assert crf_value == "32"
+
+
+class TestBuildLectureCompressionCommand:
+    """Тесты для build_lecture_compression_command."""
+
+    def test_basic_command(self):
+        cmd = build_lecture_compression_command(
+            ffmpeg_path="ffmpeg",
+            input_file="lecture.mp4",
+            output_file="lecture_out.mp4",
+            crf=24,
+            preset="medium",
+            audio_bitrate="64k",
+            fps=10,
+        )
+        assert cmd[0] == "ffmpeg"
+        assert "-i" in cmd
+        assert cmd[cmd.index("-i") + 1] == "lecture.mp4"
+        assert "-c:v" in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert cmd[-1] == "lecture_out.mp4"
+
+    def test_tune_stillimage(self):
+        cmd = build_lecture_compression_command(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            crf=24,
+            preset="medium",
+            audio_bitrate="64k",
+        )
+        assert "-tune" in cmd
+        assert cmd[cmd.index("-tune") + 1] == "stillimage"
+
+    def test_reduced_fps(self):
+        cmd = build_lecture_compression_command(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            crf=24,
+            preset="medium",
+            audio_bitrate="64k",
+            fps=10,
+        )
+        assert "-r" in cmd
+        assert cmd[cmd.index("-r") + 1] == "10"
+
+    def test_mono_audio(self):
+        cmd = build_lecture_compression_command(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            crf=24,
+            preset="medium",
+            audio_bitrate="64k",
+        )
+        assert "-ac" in cmd
+        assert cmd[cmd.index("-ac") + 1] == "1"
+
+    def test_custom_fps(self):
+        cmd = build_lecture_compression_command(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            crf=28,
+            preset="slow",
+            audio_bitrate="96k",
+            fps=5,
+        )
+        assert cmd[cmd.index("-r") + 1] == "5"
+        assert cmd[cmd.index("-crf") + 1] == "28"
+        assert cmd[cmd.index("-preset") + 1] == "slow"
+        assert cmd[cmd.index("-b:a") + 1] == "96k"

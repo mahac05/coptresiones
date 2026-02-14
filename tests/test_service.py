@@ -10,7 +10,7 @@ import time
 from unittest.mock import patch, MagicMock
 
 import pytest
-from core.models import JobResult, ConversionRequest, CompressionRequest
+from core.models import JobResult, ConversionRequest, CompressionRequest, LectureCompressionRequest
 from core.service import ProcessingService
 
 
@@ -177,5 +177,49 @@ class TestProcessingService:
 
         assert 50 in progress_values
         assert 100 in progress_values
+
+        service.shutdown(wait=True)
+
+    @patch("core.service.FFmpegConverter")
+    def test_submit_lecture_compression_calls_backend(self, MockConverter):
+        """Проверяет, что submit_lecture_compression вызывает backend."""
+        mock_converter = MockConverter.return_value
+        mock_converter.compress_lecture.return_value = JobResult.success(
+            output_file="lecture_out.mp4", duration_ms=300
+        )
+
+        service = ProcessingService(max_workers=1)
+        request = LectureCompressionRequest(
+            input_file="lecture.mp4",
+            output_file="lecture_out.mp4",
+            crf=24,
+            preset="medium",
+            audio_bitrate="64k",
+            fps=10,
+        )
+
+        done = threading.Event()
+        finished_results = []
+
+        def on_finished(result, filepath):
+            finished_results.append((result, filepath))
+            done.set()
+
+        cancel = threading.Event()
+        service.submit_lecture_compression(
+            request=request,
+            cancel_event=cancel,
+            on_finished=on_finished,
+        )
+        done.wait(timeout=5)
+
+        mock_converter.compress_lecture.assert_called_once()
+        call_kwargs = mock_converter.compress_lecture.call_args
+        assert call_kwargs.kwargs["input_file"] == "lecture.mp4"
+        assert call_kwargs.kwargs["fps"] == 10
+
+        assert len(finished_results) == 1
+        assert finished_results[0][0].ok is True
+        assert finished_results[0][1] == "lecture.mp4"
 
         service.shutdown(wait=True)
