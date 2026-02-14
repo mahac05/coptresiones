@@ -9,13 +9,14 @@
 import sys
 import os
 import threading
+import psutil
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QSlider, QProgressBar, QFrame,
     QStackedWidget, QFileDialog, QRadioButton, QButtonGroup,
     QScrollArea, QTextEdit, QCheckBox,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
 from backend import FFmpegConverter
@@ -45,7 +46,7 @@ class VideoProcessorApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.current_theme = "dark"
+        self.current_theme = "light"
 
         # Сервис обработки — заменяет thread-per-file + Semaphore
         self._service = ProcessingService(max_workers=MAX_PARALLEL_TASKS)
@@ -115,6 +116,28 @@ class VideoProcessorApp(QMainWindow):
         self.theme_btn.setMinimumHeight(50)
         self.theme_btn.clicked.connect(self._toggle_theme)
         sidebar_layout.addWidget(self.theme_btn)
+
+        # Монитор ресурсов
+        sidebar_layout.addSpacing(10)
+        monitor_frame = QFrame()
+        monitor_layout = QVBoxLayout(monitor_frame)
+        monitor_layout.setContentsMargins(15, 8, 15, 8)
+        monitor_layout.setSpacing(4)
+
+        self.cpu_label = QLabel("🧠 CPU: —")
+        self.cpu_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ram_label = QLabel("💾 RAM: —")
+        self.ram_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        monitor_layout.addWidget(self.cpu_label)
+        monitor_layout.addWidget(self.ram_label)
+        sidebar_layout.addWidget(monitor_frame)
+
+        # Таймер обновления монитора (каждые 2 сек.)
+        self._monitor_timer = QTimer(self)
+        self._monitor_timer.timeout.connect(self._update_monitor)
+        self._monitor_timer.start(2000)
+        self._update_monitor()  # первый запуск сразу
 
         main_layout.addWidget(self.sidebar)
 
@@ -224,6 +247,25 @@ class VideoProcessorApp(QMainWindow):
             }}
             QRadioButton:hover {{
                 color: {t['text_primary']};
+            }}
+            QCheckBox {{
+                color: {t['text_primary']};
+                spacing: 10px;
+                font-size: 15px;
+            }}
+            QCheckBox::indicator {{
+                width: 20px;
+                height: 20px;
+                border-radius: 4px;
+                border: 2px solid {t['border']};
+                background: {t['input_bg']};
+            }}
+            QCheckBox::indicator:checked {{
+                border-color: {t['accent']};
+                background: {t['accent']};
+            }}
+            QCheckBox:hover {{
+                color: {t['accent']};
             }}
             QScrollArea {{
                 border: none;
@@ -416,6 +458,11 @@ class VideoProcessorApp(QMainWindow):
             if hasattr(self, attr):
                 getattr(self, attr).setStyleSheet(f"color: {t['text_secondary']}; font-size: 14px; font-weight: bold;")
 
+        # Монитор ресурсов
+        monitor_style = f"color: {t['text_secondary']}; font-size: 12px;"
+        self.cpu_label.setStyleSheet(monitor_style)
+        self.ram_label.setStyleSheet(monitor_style)
+
         # Файловые виджеты
         for fw in list(self.conv_file_widgets.values()) + list(self.comp_file_widgets.values()) + list(self.lect_file_widgets.values()):
             fw.apply_theme(t, is_dark)
@@ -426,6 +473,16 @@ class VideoProcessorApp(QMainWindow):
                 w = getattr(self, attr)
                 if w.text():
                     w.setStyleSheet(f"color: {t['success']}; font-size: 14px;")
+
+    def _update_monitor(self):
+        """ Обновляет показания CPU/RAM."""
+        try:
+            cpu = psutil.cpu_percent(interval=None)
+            ram = psutil.virtual_memory().percent
+            self.cpu_label.setText(f"🧠 CPU: {cpu:.0f}%")
+            self.ram_label.setText(f"💾 RAM: {ram:.0f}%")
+        except Exception:
+            pass
 
     def _switch_tab(self, index):
         self.stack.setCurrentIndex(index)
@@ -470,15 +527,8 @@ class VideoProcessorApp(QMainWindow):
         self.conv_file_list_layout.setContentsMargins(0, 0, 0, 0)
         self.conv_file_list_layout.setSpacing(6)
 
-        conv_file_scroll = QScrollArea()
-        conv_file_scroll.setWidgetResizable(True)
-        conv_file_scroll.setWidget(self.conv_file_list_widget)
-        conv_file_scroll.setMaximumHeight(200)
-        conv_file_scroll.setMinimumHeight(0)
-        conv_file_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        conv_file_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self.conv_file_scroll = conv_file_scroll
-        layout.addWidget(conv_file_scroll)
+        # Файлы (без внутреннего скролла — скроллится вся страница)
+        layout.addWidget(self.conv_file_list_widget)
 
         # Настройки
         self.conv_settings_card = QFrame()
@@ -558,7 +608,7 @@ class VideoProcessorApp(QMainWindow):
 
         self.conv_log = QTextEdit()
         self.conv_log.setReadOnly(True)
-        self.conv_log.setMaximumHeight(180)
+        self.conv_log.setMaximumHeight(220)
         self.conv_log.setMinimumHeight(80)
         layout.addWidget(self.conv_log)
 
@@ -579,7 +629,6 @@ class VideoProcessorApp(QMainWindow):
                 self.conv_file_list_layout.addWidget(fw)
         # Обновляем высоту скролла
         count = len(self.conv_file_widgets)
-        self.conv_file_scroll.setMaximumHeight(min(200, count * 54 + 10))
         self._conv_log_msg(f"📂 Добавлено файлов: {len(files)}")
 
     def _conv_remove_file(self, path: str):
@@ -587,8 +636,6 @@ class VideoProcessorApp(QMainWindow):
         if fw:
             self.conv_file_list_layout.removeWidget(fw)
             fw.deleteLater()
-            count = len(self.conv_file_widgets)
-            self.conv_file_scroll.setMaximumHeight(min(200, max(0, count * 54 + 10)))
 
     def _conv_save_mode_changed(self, checked):
         self.conv_folder_btn.setVisible(checked)
@@ -698,15 +745,8 @@ class VideoProcessorApp(QMainWindow):
         self.comp_file_list_layout.setContentsMargins(0, 0, 0, 0)
         self.comp_file_list_layout.setSpacing(6)
 
-        comp_file_scroll = QScrollArea()
-        comp_file_scroll.setWidgetResizable(True)
-        comp_file_scroll.setWidget(self.comp_file_list_widget)
-        comp_file_scroll.setMaximumHeight(200)
-        comp_file_scroll.setMinimumHeight(0)
-        comp_file_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        comp_file_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self.comp_file_scroll = comp_file_scroll
-        layout.addWidget(comp_file_scroll)
+        # Файлы (без внутреннего скролла)
+        layout.addWidget(self.comp_file_list_widget)
 
         # Настройки
         self.comp_settings_card = QFrame()
@@ -813,7 +853,7 @@ class VideoProcessorApp(QMainWindow):
 
         self.comp_log = QTextEdit()
         self.comp_log.setReadOnly(True)
-        self.comp_log.setMaximumHeight(180)
+        self.comp_log.setMaximumHeight(220)
         self.comp_log.setMinimumHeight(80)
         layout.addWidget(self.comp_log)
 
@@ -833,7 +873,6 @@ class VideoProcessorApp(QMainWindow):
                 self.comp_file_widgets[f] = fw
                 self.comp_file_list_layout.addWidget(fw)
         count = len(self.comp_file_widgets)
-        self.comp_file_scroll.setMaximumHeight(min(200, count * 54 + 10))
         self._comp_log_msg(f"📂 Добавлено файлов: {len(files)}")
 
     def _comp_remove_file(self, path: str):
@@ -841,8 +880,6 @@ class VideoProcessorApp(QMainWindow):
         if fw:
             self.comp_file_list_layout.removeWidget(fw)
             fw.deleteLater()
-            count = len(self.comp_file_widgets)
-            self.comp_file_scroll.setMaximumHeight(min(200, max(0, count * 54 + 10)))
 
     def _comp_crf_changed(self, value):
         desc = get_crf_description(value)
@@ -978,15 +1015,8 @@ class VideoProcessorApp(QMainWindow):
         self.lect_file_list_layout.setContentsMargins(0, 0, 0, 0)
         self.lect_file_list_layout.setSpacing(6)
 
-        lect_file_scroll = QScrollArea()
-        lect_file_scroll.setWidgetResizable(True)
-        lect_file_scroll.setWidget(self.lect_file_list_widget)
-        lect_file_scroll.setMaximumHeight(200)
-        lect_file_scroll.setMinimumHeight(0)
-        lect_file_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        lect_file_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self.lect_file_scroll = lect_file_scroll
-        layout.addWidget(lect_file_scroll)
+        # Файлы (без внутреннего скролла)
+        layout.addWidget(self.lect_file_list_widget)
 
         # Настройки
         self.lect_settings_card = QFrame()
@@ -1098,7 +1128,7 @@ class VideoProcessorApp(QMainWindow):
 
         self.lect_log = QTextEdit()
         self.lect_log.setReadOnly(True)
-        self.lect_log.setMaximumHeight(180)
+        self.lect_log.setMaximumHeight(220)
         self.lect_log.setMinimumHeight(80)
         layout.addWidget(self.lect_log)
 
@@ -1118,7 +1148,6 @@ class VideoProcessorApp(QMainWindow):
                 self.lect_file_widgets[f] = fw
                 self.lect_file_list_layout.addWidget(fw)
         count = len(self.lect_file_widgets)
-        self.lect_file_scroll.setMaximumHeight(min(200, count * 54 + 10))
         self._lect_log_msg(f"📂 Добавлено файлов: {len(files)}")
 
     def _lect_remove_file(self, path: str):
@@ -1126,8 +1155,6 @@ class VideoProcessorApp(QMainWindow):
         if fw:
             self.lect_file_list_layout.removeWidget(fw)
             fw.deleteLater()
-            count = len(self.lect_file_widgets)
-            self.lect_file_scroll.setMaximumHeight(min(200, max(0, count * 54 + 10)))
 
     def _lect_crf_changed(self, value):
         desc = get_crf_description(value)
