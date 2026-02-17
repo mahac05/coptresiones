@@ -16,6 +16,22 @@ from typing import Callable, Optional
 
 from core.models import JobResult
 
+
+def _get_subprocess_kwargs() -> dict:
+    """
+    Возвращает дополнительные kwargs для subprocess.Popen/run,
+    чтобы на Windows не появлялось консольное окно ffmpeg.
+    """
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        return {
+            "startupinfo": startupinfo,
+            "creationflags": subprocess.CREATE_NO_WINDOW,
+        }
+    return {}
+
 # НЕ вызываем basicConfig — это задача entrypoint (main)
 logger = logging.getLogger(__name__)
 
@@ -266,7 +282,8 @@ class FFmpegConverter:
             subprocess.run(
                 [self.ffmpeg_path, "-version"],
                 capture_output=True,
-                timeout=5
+                timeout=5,
+                **_get_subprocess_kwargs(),
             )
             logger.info(f"✓ FFmpeg найден и готов к использованию: {self.ffmpeg_path}")
         except FileNotFoundError:
@@ -308,6 +325,7 @@ class FFmpegConverter:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                **_get_subprocess_kwargs(),
             )
             if result.returncode != 0:
                 return None
@@ -330,6 +348,7 @@ class FFmpegConverter:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            **_get_subprocess_kwargs(),
         )
 
         last_percent = -1
@@ -452,7 +471,8 @@ class FFmpegConverter:
                     command,
                     capture_output=True,
                     text=True,
-                    timeout=3600
+                    timeout=3600,
+                    **_get_subprocess_kwargs(),
                 )
 
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -565,6 +585,7 @@ class FFmpegConverter:
                     capture_output=True,
                     text=True,
                     timeout=3600,
+                    **_get_subprocess_kwargs(),
                 )
 
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -657,6 +678,7 @@ class FFmpegConverter:
                     capture_output=True,
                     text=True,
                     timeout=3600,
+                    **_get_subprocess_kwargs(),
                 )
 
             elapsed_ms = int((time.monotonic() - start_time) * 1000)

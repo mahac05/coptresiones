@@ -25,7 +25,7 @@ a = Analysis(
     ['app_pyqt.py'],
     pathex=[],
     binaries=ffmpeg_bins,
-    datas=[],
+    datas=[('resources/icon.ico', 'resources')],
     hiddenimports=[
         'PyQt6.QtCore',
         'PyQt6.QtGui',
@@ -69,4 +69,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='resources\\icon.ico',  # иконка приложения
 )

@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QTextEdit, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 
 from backend import FFmpegConverter
 from core.models import ConversionRequest, CompressionRequest, LectureCompressionRequest, JobResult
@@ -70,6 +70,22 @@ class VideoProcessorApp(QMainWindow):
         self.setWindowTitle("🎬 Видео Обработчик")
         self.setMinimumSize(1200, 700)
         self.resize(1200, 780)
+
+        # Иконка приложения (заголовок окна + панель задач)
+        icon_search_dirs = []
+        if getattr(sys, 'frozen', False):
+            # PyInstaller --onefile: ресурсы в _MEIPASS
+            if hasattr(sys, '_MEIPASS'):
+                icon_search_dirs.append(sys._MEIPASS)
+            # PyInstaller: рядом с exe
+            icon_search_dirs.append(os.path.dirname(sys.executable))
+        else:
+            icon_search_dirs.append(os.path.dirname(os.path.abspath(__file__)))
+        for d in icon_search_dirs:
+            icon_path = os.path.join(d, 'resources', 'icon.ico')
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+                break
 
         central = QWidget()
         self.setCentralWidget(central)
