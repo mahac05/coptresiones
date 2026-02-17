@@ -29,7 +29,7 @@ from core.settings import (
     MAX_PARALLEL_TASKS,
     DEFAULT_LECTURE_CRF, DEFAULT_LECTURE_FPS, DEFAULT_LECTURE_AUDIO_BITRATE,
     LECTURE_FPS_OPTIONS, LECTURE_AUDIO_BITRATE_OPTIONS,
-    QSV_PRESETS,
+    QSV_PRESETS, NVENC_PRESETS,
 )
 from core.service import ProcessingService
 from core.themes import PYQT_THEMES as THEMES
@@ -68,8 +68,8 @@ class VideoProcessorApp(QMainWindow):
 
     def _setup_ui(self):
         self.setWindowTitle("🎬 Видео Обработчик")
-        self.setMinimumSize(950, 700)
-        self.resize(1050, 780)
+        self.setMinimumSize(1200, 700)
+        self.resize(1200, 780)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -800,15 +800,20 @@ class VideoProcessorApp(QMainWindow):
 
         card_layout.addLayout(preset_layout)
 
-        # GPU
-        gpu_layout = QHBoxLayout()
-        self.comp_gpu_checkbox = QCheckBox("🚀 GPU (Intel QSV)")
-        self.comp_gpu_checkbox.setToolTip(TOOLTIPS.get("gpu_qsv", ""))
-        self.comp_gpu_checkbox.stateChanged.connect(self._comp_gpu_toggled)
-        gpu_layout.addWidget(self.comp_gpu_checkbox)
-        gpu_layout.addWidget(self._make_help("gpu_qsv"))
-        gpu_layout.addStretch()
-        card_layout.addLayout(gpu_layout)
+        # Энкодер
+        engine_layout = QHBoxLayout()
+        engine_lbl = QLabel("Энкодер:")
+        engine_layout.addWidget(engine_lbl)
+        engine_layout.addWidget(self._make_help("hw_accel"))
+
+        self.comp_engine_combo = QComboBox()
+        self.comp_engine_combo.addItem("🖥️ Процессор (x264)", "cpu")
+        self.comp_engine_combo.addItem("🟢 NVIDIA (NVENC)", "nvenc")
+        self.comp_engine_combo.addItem("🔵 Intel (QSV)", "qsv")
+        self.comp_engine_combo.currentIndexChanged.connect(self._comp_engine_changed)
+        engine_layout.addWidget(self.comp_engine_combo)
+        engine_layout.addStretch()
+        card_layout.addLayout(engine_layout)
 
         # Сохранение
         save_label = QLabel("Сохранить:")
@@ -902,12 +907,18 @@ class VideoProcessorApp(QMainWindow):
     def _comp_log_msg(self, msg: str):
         self.comp_log.append(msg)
 
-    def _comp_gpu_toggled(self, state):
-        """При переключении GPU обновляет список пресетов."""
-        use_gpu = bool(state)
+    def _comp_engine_changed(self, index):
+        """При смене энкодера обновляет список пресетов."""
+        engine = self.comp_engine_combo.currentData()
         current_text = self.comp_preset.currentText()
         self.comp_preset.clear()
-        if use_gpu:
+        if engine == "nvenc":
+            self.comp_preset.addItems(list(NVENC_PRESETS.keys()))
+            if current_text in NVENC_PRESETS:
+                self.comp_preset.setCurrentText(current_text)
+            else:
+                self.comp_preset.setCurrentText("Стандарт")
+        elif engine == "qsv":
             self.comp_preset.addItems(list(QSV_PRESETS.keys()))
             if current_text in QSV_PRESETS:
                 self.comp_preset.setCurrentText(current_text)
@@ -932,8 +943,13 @@ class VideoProcessorApp(QMainWindow):
 
         crf = self.comp_crf_slider.value()
         preset_ru = self.comp_preset.currentText()
-        use_gpu = self.comp_gpu_checkbox.isChecked()
-        presets_map = QSV_PRESETS if use_gpu else PRESETS
+        engine = self.comp_engine_combo.currentData()
+        if engine == "nvenc":
+            presets_map = NVENC_PRESETS
+        elif engine == "qsv":
+            presets_map = QSV_PRESETS
+        else:
+            presets_map = PRESETS
         preset_en = presets_map.get(preset_ru, "medium")
         audio_br = self.comp_audio.currentText()
 
@@ -957,7 +973,7 @@ class VideoProcessorApp(QMainWindow):
                 crf=crf,
                 preset=preset_en,
                 audio_bitrate=audio_br,
-                use_gpu=self.comp_gpu_checkbox.isChecked(),
+                hw_accel=engine,
             )
 
             self._service.submit_compression(

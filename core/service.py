@@ -232,7 +232,7 @@ class ProcessingService:
                 crf=request.crf,
                 preset=request.preset,
                 audio_bitrate=request.audio_bitrate,
-                use_gpu=request.use_gpu,
+                hw_accel=request.hw_accel,
                 show_progress=True,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,

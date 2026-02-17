@@ -6,7 +6,13 @@
 """
 
 import pytest
-from backend import build_conversion_command, build_compression_command, build_lecture_compression_command, build_compression_command_qsv
+from backend import (
+    build_conversion_command,
+    build_compression_command,
+    build_lecture_compression_command,
+    build_compression_command_qsv,
+    build_compression_command_nvenc,
+)
 
 
 class TestBuildConversionCommand:
@@ -227,3 +233,52 @@ class TestBuildCompressionCommandQsv:
         assert "-crf" not in cmd
         assert cmd[cmd.index("-preset") + 1] == "fast"
         assert cmd[cmd.index("-b:a") + 1] == "96k"
+
+
+class TestBuildCompressionCommandNvenc:
+    """Тесты для build_compression_command_nvenc."""
+
+    def test_uses_nvenc_codec(self):
+        cmd = build_compression_command_nvenc(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            cq=23,
+            preset="p4",
+            audio_bitrate="128k",
+        )
+        assert cmd[0] == "ffmpeg"
+        assert "-c:v" in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "h264_nvenc"
+
+    def test_hwaccel_cuda(self):
+        cmd = build_compression_command_nvenc(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            cq=23,
+            preset="p4",
+            audio_bitrate="128k",
+        )
+        assert "-hwaccel" in cmd
+        assert cmd[cmd.index("-hwaccel") + 1] == "cuda"
+        assert "-hwaccel_output_format" in cmd
+        assert cmd[cmd.index("-hwaccel_output_format") + 1] == "cuda"
+
+    def test_cq_instead_of_crf(self):
+        cmd = build_compression_command_nvenc(
+            ffmpeg_path="ffmpeg",
+            input_file="in.mp4",
+            output_file="out.mp4",
+            cq=28,
+            preset="p5",
+            audio_bitrate="96k",
+        )
+        assert "-cq" in cmd
+        assert cmd[cmd.index("-cq") + 1] == "28"
+        assert "-crf" not in cmd
+        assert "-rc" in cmd
+        assert cmd[cmd.index("-rc") + 1] == "vbr"
+        assert cmd[cmd.index("-preset") + 1] == "p5"
+        assert cmd[cmd.index("-b:a") + 1] == "96k"
+

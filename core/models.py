@@ -94,7 +94,7 @@ class CompressionRequest:
     crf: int = 23
     preset: str = "medium"
     audio_bitrate: str = "128k"
-    use_gpu: bool = False
+    hw_accel: str = "cpu"  # "cpu", "nvenc", "qsv"
 
 
 @dataclass
