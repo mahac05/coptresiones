@@ -1,7 +1,8 @@
-# Python cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
 # IDE
 .vscode/
@@ -10,3 +11,19 @@ __pycache__/
 # Virtual environment
 venv/
 env/
+.venv/
+
+# PyInstaller
+build/
+dist/
+
+# FFmpeg binaries (too large for git)
+resources/ffmpeg/*.exe
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Temp
+*.log
+*.tmp

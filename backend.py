@@ -10,6 +10,7 @@ import subprocess
 import logging
 import threading
 import time
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -17,6 +18,58 @@ from core.models import JobResult
 
 # НЕ вызываем basicConfig — это задача entrypoint (main)
 logger = logging.getLogger(__name__)
+
+
+def find_ffmpeg_path(executable: str = "ffmpeg") -> str:
+    """
+    Ищет путь к FFmpeg/FFprobe в следующем порядке:
+    1. В локальной папке resources/ffmpeg/ (для разработки и portable версии)
+    2. Рядом с исполняемым файлом (для PyInstaller --onefile)
+    3. В папке _MEIPASSresources/ffmpeg/ (для PyInstaller с ресурсами)
+    4. В системном PATH
+    
+    Args:
+        executable: имя исполняемого файла ("ffmpeg" или "ffprobe")
+    
+    Returns:
+        Полный путь к исполняемому файлу или просто имя (если в PATH)
+    """
+    exe_name = f"{executable}.exe" if os.name == "nt" else executable
+    
+    # 1. Проверяем локальную папку resources/ffmpeg/
+    # (работает при разработке и при portable распространении)
+    script_dir = Path(__file__).parent.resolve()
+    local_ffmpeg = script_dir / "resources" / "ffmpeg" / exe_name
+    
+    # Также проверяем уровень выше (если backend.py в подпапке)
+    parent_ffmpeg = script_dir.parent / "resources" / "ffmpeg" / exe_name
+    
+    if local_ffmpeg.exists():
+        logger.info(f"✓ Найден {executable} в локальных ресурсах: {local_ffmpeg}")
+        return str(local_ffmpeg)
+    elif parent_ffmpeg.exists():
+        logger.info(f"✓ Найден {executable} в локальных ресурсах: {parent_ffmpeg}")
+        return str(parent_ffmpeg)
+    
+    # 2. Проверяем папку с исполняемым файлом (PyInstaller --onefile)
+    if getattr(sys, 'frozen', False):
+        # Приложение запущено из PyInstaller
+        exe_dir = Path(sys.executable).parent
+        bundled_ffmpeg = exe_dir / exe_name
+        if bundled_ffmpeg.exists():
+            logger.info(f"✓ Найден {executable} рядом с exe: {bundled_ffmpeg}")
+            return str(bundled_ffmpeg)
+        
+        # 3. Проверяем временную папку PyInstaller с ресурсами (_MEIPASS)
+        if hasattr(sys, '_MEIPASS'):
+            meipass_ffmpeg = Path(sys._MEIPASS) / "resources" / "ffmpeg" / exe_name
+            if meipass_ffmpeg.exists():
+                logger.info(f"✓ Найден {executable} в _MEIPASS: {meipass_ffmpeg}")
+                return str(meipass_ffmpeg)
+    
+    # 4. Используем системный PATH
+    logger.info(f"→ {executable} не найден локально, используем системный PATH")
+    return executable
 
 
 # ─── Чистые функции построения ffmpeg-команд ─────────────────────────
@@ -193,14 +246,18 @@ class FFmpegConverter:
         'ogg': {'codec': 'libvorbis', 'extension': '.ogg'},
     }
 
-    def __init__(self, ffmpeg_path: str = "ffmpeg"):
+    def __init__(self, ffmpeg_path: Optional[str] = None):
         """
         Инициализация конвертера.
 
         Args:
-            ffmpeg_path: путь к ffmpeg (по умолчанию ffmpeg из PATH)
+            ffmpeg_path: путь к ffmpeg (если None, ищется автоматически)
         """
-        self.ffmpeg_path = ffmpeg_path
+        # Если путь не указан, ищем FFmpeg автоматически
+        if ffmpeg_path is None:
+            self.ffmpeg_path = find_ffmpeg_path("ffmpeg")
+        else:
+            self.ffmpeg_path = ffmpeg_path
         self._check_ffmpeg()
 
     def _check_ffmpeg(self):
@@ -211,12 +268,15 @@ class FFmpegConverter:
                 capture_output=True,
                 timeout=5
             )
-            logger.info("FFmpeg найден и готов к использованию")
+            logger.info(f"✓ FFmpeg найден и готов к использованию: {self.ffmpeg_path}")
         except FileNotFoundError:
             logger.error(f"FFmpeg не найден по пути: {self.ffmpeg_path}")
             raise FileNotFoundError(
-                f"FFmpeg не установлен или недоступен. "
-                f"Скачайте с https://ffmpeg.org/download.html"
+                f"FFmpeg не установлен или недоступен.\n"
+                f"Варианты решения:\n"
+                f"1. Поместите ffmpeg.exe в папку resources/ffmpeg/\n"
+                f"2. Скачайте с https://ffmpeg.org/download.html и добавьте в PATH\n"
+                f"3. Используйте скрипт download_ffmpeg.ps1"
             )
         except Exception as e:
             logger.error(f"Ошибка при проверке FFmpeg: {e}")
@@ -224,9 +284,14 @@ class FFmpegConverter:
 
     def _get_ffprobe_path(self) -> str:
         """Возвращает путь к ffprobe на основе ffmpeg_path."""
+        # Пытаемся найти ffprobe тем же способом, что и ffmpeg
         if self.ffmpeg_path.lower().endswith(("ffmpeg", "ffmpeg.exe")):
-            return self.ffmpeg_path.rsplit("ffmpeg", 1)[0] + "ffprobe"
-        return "ffprobe"
+            # Если путь к ffmpeg явный, заменяем ffmpeg на ffprobe
+            base = self.ffmpeg_path.rsplit("ffmpeg", 1)[0]
+            ext = ".exe" if os.name == "nt" else ""
+            return f"{base}ffprobe{ext}"
+        # Иначе ищем ffprobe автоматически
+        return find_ffmpeg_path("ffprobe")
 
     def _get_duration_seconds(self, input_file: str) -> Optional[float]:
         """Получает длительность файла (секунды) через ffprobe."""
