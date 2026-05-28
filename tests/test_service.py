@@ -50,8 +50,8 @@ class TestProcessingService:
 
         mock_converter.convert_mp4_to_audio.assert_called_once()
         call_kwargs = mock_converter.convert_mp4_to_audio.call_args
-        assert call_kwargs.kwargs["input_file"] == "input.mp4"
-        assert call_kwargs.kwargs["output_format"] == "m4a"
+        assert call_kwargs.kwargs["request"].input_file == "input.mp4"
+        assert call_kwargs.kwargs["request"].output_format == "m4a"
 
         assert len(finished_results) == 1
         assert finished_results[0][0].ok is True
@@ -215,8 +215,8 @@ class TestProcessingService:
 
         mock_converter.compress_lecture.assert_called_once()
         call_kwargs = mock_converter.compress_lecture.call_args
-        assert call_kwargs.kwargs["input_file"] == "lecture.mp4"
-        assert call_kwargs.kwargs["fps"] == 10
+        assert call_kwargs.kwargs["request"].input_file == "lecture.mp4"
+        assert call_kwargs.kwargs["request"].fps == 10
 
         assert len(finished_results) == 1
         assert finished_results[0][0].ok is True

@@ -185,10 +185,7 @@ class ProcessingService:
 
         try:
             result = self._converter.convert_mp4_to_audio(
-                input_file=request.input_file,
-                output_format=request.output_format,
-                bitrate=request.bitrate,
-                output_file=request.output_file,
+                request=request,
                 show_progress=True,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
@@ -227,12 +224,7 @@ class ProcessingService:
 
         try:
             result = self._converter.compress_mp4_video(
-                input_file=request.input_file,
-                output_file=request.output_file,
-                crf=request.crf,
-                preset=request.preset,
-                audio_bitrate=request.audio_bitrate,
-                hw_accel=request.hw_accel,
+                request=request,
                 show_progress=True,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
@@ -271,12 +263,7 @@ class ProcessingService:
 
         try:
             result = self._converter.compress_lecture(
-                input_file=request.input_file,
-                output_file=request.output_file,
-                crf=request.crf,
-                preset=request.preset,
-                audio_bitrate=request.audio_bitrate,
-                fps=request.fps,
+                request=request,
                 show_progress=True,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,

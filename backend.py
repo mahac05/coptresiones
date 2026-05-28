@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.models import JobResult
+from core.models import JobResult, ConversionRequest, CompressionRequest, LectureCompressionRequest
 
 
 def _get_subprocess_kwargs() -> dict:
@@ -399,10 +399,7 @@ class FFmpegConverter:
 
     def convert_mp4_to_audio(
         self,
-        input_file: str,
-        output_format: str = "m4a",
-        bitrate: str = "192k",
-        output_file: str = None,
+        request: ConversionRequest,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -411,15 +408,17 @@ class FFmpegConverter:
         Преобразует MP4 видео в аудио файл.
 
         Args:
-            input_file: путь к MP4 файлу
-            output_format: формат выходного аудио (mp3, wav, aac, flac, ogg)
-            bitrate: битрейт аудио (например, '192k', '320k', '128k')
-            output_file: путь к выходному файлу (если не указан, создаётся в той же папке)
+            request: Запрос на конвертацию
 
         Returns:
             JobResult с результатом операции
         """
         start_time = time.monotonic()
+
+        input_file = request.input_file
+        output_format = request.output_format
+        bitrate = request.bitrate
+        output_file = request.output_file
 
         if not os.path.exists(input_file):
             logger.error(f"Входной файл не найден: {input_file}")
@@ -436,7 +435,7 @@ class FFmpegConverter:
             logger.error(msg)
             return JobResult.error("invalid_format", msg)
 
-        if output_file is None:
+        if not output_file:
             input_path = Path(input_file)
             ext = self.AUDIO_FORMATS[output_format.lower()]['extension']
             output_file = str(input_path.parent / (input_path.stem + "_audio" + ext))
@@ -505,12 +504,7 @@ class FFmpegConverter:
 
     def compress_mp4_video(
         self,
-        input_file: str,
-        output_file: str = None,
-        crf: int = 23,
-        preset: str = "medium",
-        audio_bitrate: str = "128k",
-        hw_accel: str = "cpu",
+        request: CompressionRequest,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -519,18 +513,25 @@ class FFmpegConverter:
         Сжимает MP4 видео (H.264) с использованием CRF.
 
         Args:
-            hw_accel: "cpu", "nvenc" (NVIDIA) или "qsv" (Intel)
+            request: Запрос на сжатие (содержит hw_accel: "cpu", "nvenc" (NVIDIA) или "qsv" (Intel))
 
         Returns:
             JobResult с результатом операции
         """
         start_time = time.monotonic()
 
+        input_file = request.input_file
+        output_file = request.output_file
+        crf = request.crf
+        preset = request.preset
+        audio_bitrate = request.audio_bitrate
+        hw_accel = request.hw_accel
+
         if not os.path.exists(input_file):
             logger.error(f"Входной файл не найден: {input_file}")
             return JobResult.error("file_not_found", f"Входной файл не найден: {input_file}")
 
-        if output_file is None:
+        if not output_file:
             input_path = Path(input_file)
             output_file = str(input_path.parent / (input_path.stem + "_compressed.mp4"))
 
@@ -617,12 +618,7 @@ class FFmpegConverter:
 
     def compress_lecture(
         self,
-        input_file: str,
-        output_file: str = None,
-        crf: int = 24,
-        preset: str = "medium",
-        audio_bitrate: str = "64k",
-        fps: int = 10,
+        request: LectureCompressionRequest,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -634,16 +630,26 @@ class FFmpegConverter:
         пониженный FPS и моно-аудио. Даёт 10–50× сжатие по сравнению
         с обычным видео.
 
+        Args:
+            request: Запрос на сжатие лекции
+
         Returns:
             JobResult с результатом операции
         """
         start_time = time.monotonic()
 
+        input_file = request.input_file
+        output_file = request.output_file
+        crf = request.crf
+        preset = request.preset
+        audio_bitrate = request.audio_bitrate
+        fps = request.fps
+
         if not os.path.exists(input_file):
             logger.error(f"Входной файл не найден: {input_file}")
             return JobResult.error("file_not_found", f"Входной файл не найден: {input_file}")
 
-        if output_file is None:
+        if not output_file:
             input_path = Path(input_file)
             output_file = str(input_path.parent / (input_path.stem + "_лекция.mp4"))
 
