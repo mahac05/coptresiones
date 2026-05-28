@@ -91,6 +91,7 @@ def find_ffmpeg_path(executable: str = "ffmpeg") -> str:
 # ─── Чистые функции построения ffmpeg-команд ─────────────────────────
 
 def build_conversion_command(
+    *,
     ffmpeg_path: str,
     input_file: str,
     output_file: str,
@@ -118,6 +119,7 @@ def build_conversion_command(
 
 
 def build_compression_command(
+    *,
     ffmpeg_path: str,
     input_file: str,
     output_file: str,
@@ -148,6 +150,7 @@ def build_compression_command(
 
 
 def build_compression_command_qsv(
+    *,
     ffmpeg_path: str,
     input_file: str,
     output_file: str,
@@ -180,6 +183,7 @@ def build_compression_command_qsv(
 
 
 def build_compression_command_nvenc(
+    *,
     ffmpeg_path: str,
     input_file: str,
     output_file: str,
@@ -214,6 +218,7 @@ def build_compression_command_nvenc(
 
 
 def build_lecture_compression_command(
+    *,
     ffmpeg_path: str,
     input_file: str,
     output_file: str,
