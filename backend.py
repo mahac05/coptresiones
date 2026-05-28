@@ -13,8 +13,18 @@ import time
 import sys
 from pathlib import Path
 from typing import Callable, Optional
+from dataclasses import dataclass
 
 from core.models import JobResult
+
+
+@dataclass
+class ConversionSettings:
+    """Настройки для конвертации видео в аудио."""
+    input_file: str
+    output_format: str = "m4a"
+    bitrate: str = "192k"
+    output_file: str = None
 
 
 def _get_subprocess_kwargs() -> dict:
@@ -399,10 +409,7 @@ class FFmpegConverter:
 
     def convert_mp4_to_audio(
         self,
-        input_file: str,
-        output_format: str = "m4a",
-        bitrate: str = "192k",
-        output_file: str = None,
+        settings: ConversionSettings,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -411,15 +418,17 @@ class FFmpegConverter:
         Преобразует MP4 видео в аудио файл.
 
         Args:
-            input_file: путь к MP4 файлу
-            output_format: формат выходного аудио (mp3, wav, aac, flac, ogg)
-            bitrate: битрейт аудио (например, '192k', '320k', '128k')
-            output_file: путь к выходному файлу (если не указан, создаётся в той же папке)
+            settings: настройки конвертации (входной файл, формат, битрейт, выходной файл)
 
         Returns:
             JobResult с результатом операции
         """
         start_time = time.monotonic()
+
+        input_file = settings.input_file
+        output_format = settings.output_format
+        bitrate = settings.bitrate
+        output_file = settings.output_file
 
         if not os.path.exists(input_file):
             logger.error(f"Входной файл не найден: {input_file}")

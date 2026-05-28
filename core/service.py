@@ -12,7 +12,7 @@ import threading
 import queue
 from typing import Callable, Optional
 
-from backend import FFmpegConverter
+from backend import FFmpegConverter, ConversionSettings
 from core.models import JobResult, ConversionRequest, CompressionRequest, LectureCompressionRequest
 from core.settings import MAX_PARALLEL_TASKS
 
@@ -184,11 +184,14 @@ class ProcessingService:
                 on_progress(percent, request.input_file)
 
         try:
-            result = self._converter.convert_mp4_to_audio(
+            settings = ConversionSettings(
                 input_file=request.input_file,
                 output_format=request.output_format,
                 bitrate=request.bitrate,
                 output_file=request.output_file,
+            )
+            result = self._converter.convert_mp4_to_audio(
+                settings=settings,
                 show_progress=True,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
