@@ -216,7 +216,10 @@ class TestProcessingService:
         mock_converter.compress_lecture.assert_called_once()
         call_kwargs = mock_converter.compress_lecture.call_args
         assert call_kwargs.kwargs["input_file"] == "lecture.mp4"
-        assert call_kwargs.kwargs["fps"] == 10
+        assert call_kwargs.kwargs["options"].fps == 10
+        assert call_kwargs.kwargs["options"].crf == 24
+        assert call_kwargs.kwargs["options"].preset == "medium"
+        assert call_kwargs.kwargs["options"].audio_bitrate == "64k"
 
         assert len(finished_results) == 1
         assert finished_results[0][0].ok is True

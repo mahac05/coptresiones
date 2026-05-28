@@ -13,8 +13,17 @@ import time
 import sys
 from pathlib import Path
 from typing import Callable, Optional
+from dataclasses import dataclass
 
 from core.models import JobResult
+
+
+@dataclass
+class LectureCompressionOptions:
+    crf: int = 24
+    preset: str = "medium"
+    audio_bitrate: str = "64k"
+    fps: int = 10
 
 
 def _get_subprocess_kwargs() -> dict:
@@ -619,10 +628,7 @@ class FFmpegConverter:
         self,
         input_file: str,
         output_file: str = None,
-        crf: int = 24,
-        preset: str = "medium",
-        audio_bitrate: str = "64k",
-        fps: int = 10,
+        options: LectureCompressionOptions = None,
         show_progress: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -637,6 +643,9 @@ class FFmpegConverter:
         Returns:
             JobResult с результатом операции
         """
+        if options is None:
+            options = LectureCompressionOptions()
+
         start_time = time.monotonic()
 
         if not os.path.exists(input_file):
@@ -650,17 +659,17 @@ class FFmpegConverter:
         logger.info("Начинаем сжатие лекции...")
         logger.info(f"Входной файл: {input_file}")
         logger.info(f"Выходной файл: {output_file}")
-        logger.info(f"CRF: {crf}, preset: {preset}, audio: {audio_bitrate}, fps: {fps}")
+        logger.info(f"CRF: {options.crf}, preset: {options.preset}, audio: {options.audio_bitrate}, fps: {options.fps}")
 
         try:
             command = build_lecture_compression_command(
                 ffmpeg_path=self.ffmpeg_path,
                 input_file=input_file,
                 output_file=output_file,
-                crf=crf,
-                preset=preset,
-                audio_bitrate=audio_bitrate,
-                fps=fps,
+                crf=options.crf,
+                preset=options.preset,
+                audio_bitrate=options.audio_bitrate,
+                fps=options.fps,
             )
 
             duration_seconds = self._get_duration_seconds(input_file) if show_progress else None

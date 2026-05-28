@@ -12,7 +12,7 @@ import threading
 import queue
 from typing import Callable, Optional
 
-from backend import FFmpegConverter
+from backend import FFmpegConverter, LectureCompressionOptions
 from core.models import JobResult, ConversionRequest, CompressionRequest, LectureCompressionRequest
 from core.settings import MAX_PARALLEL_TASKS
 
@@ -270,13 +270,16 @@ class ProcessingService:
                 on_progress(percent, request.input_file)
 
         try:
-            result = self._converter.compress_lecture(
-                input_file=request.input_file,
-                output_file=request.output_file,
+            options = LectureCompressionOptions(
                 crf=request.crf,
                 preset=request.preset,
                 audio_bitrate=request.audio_bitrate,
                 fps=request.fps,
+            )
+            result = self._converter.compress_lecture(
+                input_file=request.input_file,
+                output_file=request.output_file,
+                options=options,
                 show_progress=True,
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
