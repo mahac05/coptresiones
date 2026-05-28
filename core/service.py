@@ -38,12 +38,7 @@ class _SimpleThreadPool:
 
     def _worker_loop(self):
         while True:
-            try:
-                task = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                if self._shutdown:
-                    return
-                continue
+            task = self._queue.get()
             if task is None:  # Sentinel for shutdown
                 return
             func, args = task
