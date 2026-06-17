@@ -10,6 +10,7 @@ import sys
 import os
 import threading
 import psutil
+import itertools
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QSlider, QProgressBar, QFrame,
@@ -480,7 +481,7 @@ class VideoProcessorApp(QMainWindow):
         self.ram_label.setStyleSheet(monitor_style)
 
         # Файловые виджеты
-        for fw in list(self.conv_file_widgets.values()) + list(self.comp_file_widgets.values()) + list(self.lect_file_widgets.values()):
+        for fw in itertools.chain(self.conv_file_widgets.values(), self.comp_file_widgets.values(), self.lect_file_widgets.values()):
             fw.apply_theme(t, is_dark)
 
         # Путь к папке
