@@ -6,6 +6,7 @@
 """
 
 import pytest
+from unittest.mock import patch, MagicMock
 from backend import (
     build_conversion_command,
     build_compression_command,
@@ -282,3 +283,26 @@ class TestBuildCompressionCommandNvenc:
         assert cmd[cmd.index("-preset") + 1] == "p5"
         assert cmd[cmd.index("-b:a") + 1] == "96k"
 
+
+class TestFFmpegConverter:
+    """Tests for FFmpegConverter."""
+
+    @patch("backend.subprocess.run")
+    def test_get_duration_seconds_exception(self, mock_run):
+        """Checks that _get_duration_seconds returns None when an exception occurs."""
+        from backend import FFmpegConverter
+
+        # Bypass FFmpeg check in __init__
+        with patch.object(FFmpegConverter, "_check_ffmpeg"):
+            converter = FFmpegConverter()
+
+            # Configure mock to raise an exception in the method itself
+            mock_run.side_effect = Exception("Test Exception")
+
+            # Mock ffprobe search to avoid system dependency
+            with patch.object(converter, "_get_ffprobe_path", return_value="ffprobe"):
+                # Call the method
+                result = converter._get_duration_seconds("test_file.mp4")
+
+                # Check the result
+                assert result is None
