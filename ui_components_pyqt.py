@@ -1,4 +1,3 @@
-# ui_components_pyqt.py
 # -*- coding: utf-8 -*-
 """
 Переиспользуемые UI компоненты для PyQt6 приложения.
@@ -18,6 +17,7 @@ def format_duration(ms: int) -> str:
 
 import os
 import threading
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QFrame, QLabel, QHBoxLayout, QVBoxLayout, QPushButton, 
     QProgressBar, QFileDialog
@@ -229,8 +229,17 @@ class HelpLabel(QLabel):
 
 # ─── Утилита обрезки пути ───────────────────────────────────────────
 def elide_path(path: str, max_chars: int = 45) -> str:
-    """Обрезает путь с многоточием в середине."""
+    """Сокращает путь, если он слишком длинный: C:/.../folder/file.mp4"""
     if len(path) <= max_chars:
         return path
-    half = (max_chars - 3) // 2
-    return path[:half] + "..." + path[-half:]
+
+    p = Path(path)
+    name = p.name
+
+    if len(name) >= max_chars - 5:
+        # Если само имя файла огромное
+        return name[:max_chars-8] + "..." + p.suffix
+
+    # Иначе сокращаем директории, оставляя имя файла целиком
+    allowed_start = max_chars - len(name) - 3
+    return path[:allowed_start] + "..." + name
