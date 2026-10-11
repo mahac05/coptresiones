@@ -329,6 +329,7 @@ class FFmpegConverter:
                     "-v", "error",
                     "-show_entries", "format=duration",
                     "-of", "default=nokey=1:noprint_wrappers=1",
+                    "--",
                     input_file,
                 ],
                 capture_output=True,
