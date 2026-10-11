@@ -284,6 +284,7 @@ class FFmpegConverter:
         else:
             self.ffmpeg_path = ffmpeg_path
         self._check_ffmpeg()
+        self.ffprobe_path = self._get_ffprobe_path()
 
     def _check_ffmpeg(self):
         """Проверяет доступность FFmpeg."""
@@ -321,11 +322,10 @@ class FFmpegConverter:
 
     def _get_duration_seconds(self, input_file: str) -> Optional[float]:
         """Получает длительность файла (секунды) через ffprobe."""
-        ffprobe_path = self._get_ffprobe_path()
         try:
             result = subprocess.run(
                 [
-                    ffprobe_path,
+                    self.ffprobe_path,
                     "-v", "error",
                     "-show_entries", "format=duration",
                     "-of", "default=nokey=1:noprint_wrappers=1",
