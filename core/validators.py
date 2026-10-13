@@ -25,6 +25,8 @@ def validate_input_file(path: str) -> Tuple[bool, str]:
         return False, f"Файл не найден: {path}"
     if not os.path.isfile(path):
         return False, f"Указанный путь не является файлом: {path}"
+    if not os.access(path, os.R_OK):
+        return False, f"Нет прав на чтение файла: {path}"
     return True, ""
 
 
