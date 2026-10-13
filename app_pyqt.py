@@ -383,19 +383,19 @@ class VideoProcessorApp(QMainWindow):
                 border-radius: 18px;
             }}
         """
-        for attr in ['conv_settings_card', 'comp_settings_card', 'lect_settings_card']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(card_style)
+        if w := getattr(self, 'conv_settings_card', None): w.setStyleSheet(card_style)
+        if w := getattr(self, 'comp_settings_card', None): w.setStyleSheet(card_style)
+        if w := getattr(self, 'lect_settings_card', None): w.setStyleSheet(card_style)
 
         # Заголовки
-        for attr in ['conv_header', 'comp_header', 'lect_header']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
+        if w := getattr(self, 'conv_header', None): w.setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
+        if w := getattr(self, 'comp_header', None): w.setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
+        if w := getattr(self, 'lect_header', None): w.setStyleSheet(f"font-size: 30px; font-weight: bold; color: {t['text_primary']};")
 
         # Drop zones
-        for attr in ['conv_drop_zone', 'comp_drop_zone', 'lect_drop_zone']:
-            if hasattr(self, attr):
-                getattr(self, attr).apply_theme(t, is_dark)
+        if w := getattr(self, 'conv_drop_zone', None): w.apply_theme(t, is_dark)
+        if w := getattr(self, 'comp_drop_zone', None): w.apply_theme(t, is_dark)
+        if w := getattr(self, 'lect_drop_zone', None): w.apply_theme(t, is_dark)
 
         # Кнопки запуска
         btn_style = f"""
@@ -422,9 +422,9 @@ class VideoProcessorApp(QMainWindow):
                 color: {t['text_muted']};
             }}
         """
-        for attr in ['conv_run_btn', 'comp_run_btn', 'lect_run_btn']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(btn_style)
+        if w := getattr(self, 'conv_run_btn', None): w.setStyleSheet(btn_style)
+        if w := getattr(self, 'comp_run_btn', None): w.setStyleSheet(btn_style)
+        if w := getattr(self, 'lect_run_btn', None): w.setStyleSheet(btn_style)
 
         # Вторичные кнопки
         sec_btn_style = f"""
@@ -440,14 +440,13 @@ class VideoProcessorApp(QMainWindow):
                 background: {'rgba(0, 212, 255, 0.1)' if is_dark else 'rgba(8, 145, 178, 0.1)'};
             }}
         """
-        for attr in ['conv_folder_btn', 'comp_folder_btn', 'lect_folder_btn']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(sec_btn_style)
+        if w := getattr(self, 'conv_folder_btn', None): w.setStyleSheet(sec_btn_style)
+        if w := getattr(self, 'comp_folder_btn', None): w.setStyleSheet(sec_btn_style)
+        if w := getattr(self, 'lect_folder_btn', None): w.setStyleSheet(sec_btn_style)
 
         # CRF
-        for attr in ['comp_crf_value', 'lect_crf_value']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(f"color: {t['accent']}; font-size: 15px;")
+        if w := getattr(self, 'comp_crf_value', None): w.setStyleSheet(f"color: {t['accent']}; font-size: 15px;")
+        if w := getattr(self, 'lect_crf_value', None): w.setStyleSheet(f"color: {t['accent']}; font-size: 15px;")
 
         # Help labels
         for hl in self._help_labels:
@@ -465,14 +464,14 @@ class VideoProcessorApp(QMainWindow):
                 font-size: 12px;
             }}
         """
-        for attr in ['conv_log', 'comp_log', 'lect_log']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(log_style)
+        if w := getattr(self, 'conv_log', None): w.setStyleSheet(log_style)
+        if w := getattr(self, 'comp_log', None): w.setStyleSheet(log_style)
+        if w := getattr(self, 'lect_log', None): w.setStyleSheet(log_style)
 
         # Лейблы журнала
-        for attr in ['conv_log_label', 'comp_log_label', 'lect_log_label']:
-            if hasattr(self, attr):
-                getattr(self, attr).setStyleSheet(f"color: {t['text_secondary']}; font-size: 14px; font-weight: bold;")
+        if w := getattr(self, 'conv_log_label', None): w.setStyleSheet(f"color: {t['text_secondary']}; font-size: 14px; font-weight: bold;")
+        if w := getattr(self, 'comp_log_label', None): w.setStyleSheet(f"color: {t['text_secondary']}; font-size: 14px; font-weight: bold;")
+        if w := getattr(self, 'lect_log_label', None): w.setStyleSheet(f"color: {t['text_secondary']}; font-size: 14px; font-weight: bold;")
 
         # Монитор ресурсов
         monitor_style = f"color: {t['text_secondary']}; font-size: 12px;"
