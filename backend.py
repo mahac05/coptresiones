@@ -406,6 +406,63 @@ class FFmpegConverter:
             stderr="",
         )
 
+    def _execute_ffmpeg_command(
+        self,
+        command: list[str],
+        input_file: str,
+        output_file: str,
+        start_time: float,
+        success_message: str,
+        show_progress: bool,
+        progress_callback: Optional[Callable[[int], None]],
+        cancel_event: Optional[threading.Event],
+    ) -> JobResult:
+        try:
+            duration_seconds = self._get_duration_seconds(input_file) if show_progress else None
+
+            if show_progress:
+                result = self._run_ffmpeg_with_progress(
+                    command,
+                    duration_seconds,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
+            else:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,
+                    **_get_subprocess_kwargs(),
+                )
+
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+            if cancel_event and cancel_event.is_set():
+                return JobResult.cancelled(duration_ms=elapsed_ms)
+
+            if result.returncode == 0:
+                logger.info(f"{success_message}")
+                logger.info(f"Файл сохранён: {output_file}")
+                return JobResult.success(output_file=output_file, duration_ms=elapsed_ms)
+            else:
+                logger.error(f"❌ Ошибка выполнения FFmpeg:")
+                logger.error(result.stderr)
+                return JobResult.error(
+                    "ffmpeg_error",
+                    f"FFmpeg вернул код {result.returncode}: {result.stderr}",
+                    duration_ms=elapsed_ms,
+                )
+
+        except subprocess.TimeoutExpired:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            logger.error("❌ Таймаут: процесс занял слишком много времени")
+            return JobResult.timeout(duration_ms=elapsed_ms)
+        except Exception as e:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            logger.error(f"❌ Неожиданная ошибка: {e}")
+            return JobResult.error("unknown", str(e), duration_ms=elapsed_ms)
+
     def convert_mp4_to_audio(
         self,
         input_file: str,
@@ -455,61 +512,26 @@ class FFmpegConverter:
         logger.info(f"Выходной файл: {output_file}")
         logger.info(f"Формат: {output_format}, Битрейт: {bitrate}")
 
-        try:
-            codec = self.AUDIO_FORMATS[output_format.lower()]['codec']
+        codec = self.AUDIO_FORMATS[output_format.lower()]['codec']
 
-            command = build_conversion_command(
-                ffmpeg_path=self.ffmpeg_path,
-                input_file=input_file,
-                output_file=output_file,
-                codec=codec,
-                bitrate=bitrate,
-            )
+        command = build_conversion_command(
+            ffmpeg_path=self.ffmpeg_path,
+            input_file=input_file,
+            output_file=output_file,
+            codec=codec,
+            bitrate=bitrate,
+        )
 
-            duration_seconds = self._get_duration_seconds(input_file) if show_progress else None
-
-            if show_progress:
-                result = self._run_ffmpeg_with_progress(
-                    command,
-                    duration_seconds,
-                    progress_callback=progress_callback,
-                    cancel_event=cancel_event,
-                )
-            else:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=3600,
-                    **_get_subprocess_kwargs(),
-                )
-
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-
-            if cancel_event and cancel_event.is_set():
-                return JobResult.cancelled(duration_ms=elapsed_ms)
-
-            if result.returncode == 0:
-                logger.info(f"✅ Конвертирование успешно завершено!")
-                logger.info(f"Файл сохранён: {output_file}")
-                return JobResult.success(output_file=output_file, duration_ms=elapsed_ms)
-            else:
-                logger.error(f"❌ Ошибка при конвертировании:")
-                logger.error(result.stderr)
-                return JobResult.error(
-                    "ffmpeg_error",
-                    f"FFmpeg вернул код {result.returncode}: {result.stderr}",
-                    duration_ms=elapsed_ms,
-                )
-
-        except subprocess.TimeoutExpired:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            logger.error("❌ Таймаут: процесс конвертирования занял слишком много времени")
-            return JobResult.timeout(duration_ms=elapsed_ms)
-        except Exception as e:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            logger.error(f"❌ Неожиданная ошибка: {e}")
-            return JobResult.error("unknown", str(e), duration_ms=elapsed_ms)
+        return self._execute_ffmpeg_command(
+            command=command,
+            input_file=input_file,
+            output_file=output_file,
+            start_time=start_time,
+            success_message="✅ Конвертирование успешно завершено!",
+            show_progress=show_progress,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
 
 
     def compress_mp4_video(
@@ -550,79 +572,44 @@ class FFmpegConverter:
         logger.info(f"Выходной файл: {output_file}")
         logger.info(f"CRF: {crf}, preset: {preset}, audio: {audio_bitrate}")
 
-        try:
-            if hw_accel == "nvenc":
-                command = build_compression_command_nvenc(
-                    ffmpeg_path=self.ffmpeg_path,
-                    input_file=input_file,
-                    output_file=output_file,
-                    cq=crf,
-                    preset=preset,
-                    audio_bitrate=audio_bitrate,
-                )
-            elif hw_accel == "qsv":
-                command = build_compression_command_qsv(
-                    ffmpeg_path=self.ffmpeg_path,
-                    input_file=input_file,
-                    output_file=output_file,
-                    global_quality=crf,
-                    preset=preset,
-                    audio_bitrate=audio_bitrate,
-                )
-            else:
-                command = build_compression_command(
-                    ffmpeg_path=self.ffmpeg_path,
-                    input_file=input_file,
-                    output_file=output_file,
-                    crf=crf,
-                    preset=preset,
-                    audio_bitrate=audio_bitrate,
-                )
-
-            duration_seconds = self._get_duration_seconds(input_file) if show_progress else None
-
-            if show_progress:
-                result = self._run_ffmpeg_with_progress(
-                    command,
-                    duration_seconds,
-                    progress_callback=progress_callback,
-                    cancel_event=cancel_event,
-                )
-            else:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=3600,
-                    **_get_subprocess_kwargs(),
-                )
-
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-
-            if cancel_event and cancel_event.is_set():
-                return JobResult.cancelled(duration_ms=elapsed_ms)
-
-            if result.returncode == 0:
-                logger.info("✅ Сжатие успешно завершено!")
-                logger.info(f"Файл сохранён: {output_file}")
-                return JobResult.success(output_file=output_file, duration_ms=elapsed_ms)
-
-            logger.error("❌ Ошибка при сжатии видео:")
-            logger.error(result.stderr)
-            return JobResult.error(
-                "ffmpeg_error",
-                f"FFmpeg вернул код {result.returncode}: {result.stderr}",
-                duration_ms=elapsed_ms,
+        if hw_accel == "nvenc":
+            command = build_compression_command_nvenc(
+                ffmpeg_path=self.ffmpeg_path,
+                input_file=input_file,
+                output_file=output_file,
+                cq=crf,
+                preset=preset,
+                audio_bitrate=audio_bitrate,
+            )
+        elif hw_accel == "qsv":
+            command = build_compression_command_qsv(
+                ffmpeg_path=self.ffmpeg_path,
+                input_file=input_file,
+                output_file=output_file,
+                global_quality=crf,
+                preset=preset,
+                audio_bitrate=audio_bitrate,
+            )
+        else:
+            command = build_compression_command(
+                ffmpeg_path=self.ffmpeg_path,
+                input_file=input_file,
+                output_file=output_file,
+                crf=crf,
+                preset=preset,
+                audio_bitrate=audio_bitrate,
             )
 
-        except subprocess.TimeoutExpired:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            logger.error("❌ Таймаут: процесс сжатия занял слишком много времени")
-            return JobResult.timeout(duration_ms=elapsed_ms)
-        except Exception as e:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            logger.error(f"❌ Неожиданная ошибка: {e}")
-            return JobResult.error("unknown", str(e), duration_ms=elapsed_ms)
+        return self._execute_ffmpeg_command(
+            command=command,
+            input_file=input_file,
+            output_file=output_file,
+            start_time=start_time,
+            success_message="✅ Сжатие успешно завершено!",
+            show_progress=show_progress,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
 
     def compress_lecture(
         self,
@@ -661,58 +648,23 @@ class FFmpegConverter:
         logger.info(f"Выходной файл: {output_file}")
         logger.info(f"CRF: {options.crf}, preset: {options.preset}, audio: {options.audio_bitrate}, fps: {options.fps}")
 
-        try:
-            command = build_lecture_compression_command(
-                ffmpeg_path=self.ffmpeg_path,
-                input_file=input_file,
-                output_file=output_file,
-                crf=options.crf,
-                preset=options.preset,
-                audio_bitrate=options.audio_bitrate,
-                fps=options.fps,
-            )
+        command = build_lecture_compression_command(
+            ffmpeg_path=self.ffmpeg_path,
+            input_file=input_file,
+            output_file=output_file,
+            crf=options.crf,
+            preset=options.preset,
+            audio_bitrate=options.audio_bitrate,
+            fps=options.fps,
+        )
 
-            duration_seconds = self._get_duration_seconds(input_file) if show_progress else None
-
-            if show_progress:
-                result = self._run_ffmpeg_with_progress(
-                    command,
-                    duration_seconds,
-                    progress_callback=progress_callback,
-                    cancel_event=cancel_event,
-                )
-            else:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=3600,
-                    **_get_subprocess_kwargs(),
-                )
-
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-
-            if cancel_event and cancel_event.is_set():
-                return JobResult.cancelled(duration_ms=elapsed_ms)
-
-            if result.returncode == 0:
-                logger.info("✅ Сжатие лекции успешно завершено!")
-                logger.info(f"Файл сохранён: {output_file}")
-                return JobResult.success(output_file=output_file, duration_ms=elapsed_ms)
-
-            logger.error("❌ Ошибка при сжатии лекции:")
-            logger.error(result.stderr)
-            return JobResult.error(
-                "ffmpeg_error",
-                f"FFmpeg вернул код {result.returncode}: {result.stderr}",
-                duration_ms=elapsed_ms,
-            )
-
-        except subprocess.TimeoutExpired:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            logger.error("❌ Таймаут: процесс сжатия лекции занял слишком много времени")
-            return JobResult.timeout(duration_ms=elapsed_ms)
-        except Exception as e:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            logger.error(f"❌ Неожиданная ошибка: {e}")
-            return JobResult.error("unknown", str(e), duration_ms=elapsed_ms)
+        return self._execute_ffmpeg_command(
+            command=command,
+            input_file=input_file,
+            output_file=output_file,
+            start_time=start_time,
+            success_message="✅ Сжатие лекции успешно завершено!",
+            show_progress=show_progress,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
