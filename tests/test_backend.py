@@ -282,3 +282,40 @@ class TestBuildCompressionCommandNvenc:
         assert cmd[cmd.index("-preset") + 1] == "p5"
         assert cmd[cmd.index("-b:a") + 1] == "96k"
 
+
+from unittest.mock import patch
+from backend import FFmpegConverter
+
+class TestFFmpegConverterCheckFfmpeg:
+    """Тесты для FFmpegConverter._check_ffmpeg."""
+
+    @patch("backend.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value.returncode = 0
+        converter = FFmpegConverter(ffmpeg_path="fake_ffmpeg")
+
+        # Verify subprocess.run was called correctly
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["fake_ffmpeg", "-version"]
+        assert kwargs.get("capture_output") is True
+        assert kwargs.get("timeout") == 5
+
+    @patch("backend.subprocess.run")
+    def test_file_not_found_error(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("Not found")
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            FFmpegConverter(ffmpeg_path="missing_ffmpeg")
+
+        assert "FFmpeg не установлен или недоступен" in str(exc_info.value)
+        assert "Варианты решения" in str(exc_info.value)
+
+    @patch("backend.subprocess.run")
+    def test_generic_exception(self, mock_run):
+        mock_run.side_effect = Exception("Unexpected error")
+
+        with pytest.raises(Exception) as exc_info:
+            FFmpegConverter(ffmpeg_path="ffmpeg")
+
+        assert str(exc_info.value) == "Unexpected error"
