@@ -181,7 +181,16 @@ class VideoProcessorApp(QMainWindow):
 
         self.theme_btn.setText("☀️ Светлая тема" if is_dark else "🌙 Тёмная тема")
 
-        # Главный стиль
+        self._apply_main_style(t)
+        self._apply_sidebar_style(t)
+        self._apply_navigation_style(t, is_dark)
+
+        self.stack.setStyleSheet("background: transparent;")
+
+        # Обновляем виджеты
+        self._update_themed_widgets(t, is_dark)
+
+    def _apply_main_style(self, t):
         self.setStyleSheet(f"""
             QMainWindow {{
                 background: {t['bg_primary']};
@@ -302,7 +311,7 @@ class VideoProcessorApp(QMainWindow):
             }}
         """)
 
-        # Боковая панель
+    def _apply_sidebar_style(self, t):
         self.sidebar.setStyleSheet(f"""
             QFrame {{
                 background: {t['bg_sidebar']};
@@ -318,7 +327,7 @@ class VideoProcessorApp(QMainWindow):
             background: transparent;
         """)
 
-        # Стили навигации
+    def _apply_navigation_style(self, t, is_dark):
         nav_checked = f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -368,11 +377,6 @@ class VideoProcessorApp(QMainWindow):
                 color: {t['accent']};
             }}
         """)
-
-        self.stack.setStyleSheet("background: transparent;")
-
-        # Обновляем виджеты
-        self._update_themed_widgets(t, is_dark)
 
     def _update_themed_widgets(self, t, is_dark):
         # Карточки настроек
