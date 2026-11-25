@@ -6,12 +6,14 @@
 """
 
 import pytest
+from unittest.mock import patch
 from backend import (
     build_conversion_command,
     build_compression_command,
     build_lecture_compression_command,
     build_compression_command_qsv,
     build_compression_command_nvenc,
+    find_ffmpeg_path,
 )
 
 
@@ -282,3 +284,106 @@ class TestBuildCompressionCommandNvenc:
         assert cmd[cmd.index("-preset") + 1] == "p5"
         assert cmd[cmd.index("-b:a") + 1] == "96k"
 
+
+class TestFindFfmpegPath:
+    """Тесты для find_ffmpeg_path."""
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_local_ffmpeg(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "linux"
+        mock_sys.frozen = False
+        if hasattr(mock_sys, "_MEIPASS"):
+            del mock_sys._MEIPASS
+
+        mock_exists.return_value = True
+
+        path = find_ffmpeg_path()
+        assert "resources/ffmpeg/ffmpeg" in path.replace("\\", "/")
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_parent_ffmpeg(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "linux"
+        mock_sys.frozen = False
+        if hasattr(mock_sys, "_MEIPASS"):
+            del mock_sys._MEIPASS
+
+        mock_exists.side_effect = [False, True]
+        path = find_ffmpeg_path()
+        assert "resources/ffmpeg/ffmpeg" in path.replace("\\", "/")
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_frozen_bundled_ffmpeg(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "linux"
+        mock_sys.frozen = True
+        mock_sys.executable = "/fake/dir/app"
+        if hasattr(mock_sys, "_MEIPASS"):
+            del mock_sys._MEIPASS
+
+        mock_exists.side_effect = [False, False, True]
+
+        path = find_ffmpeg_path()
+        assert "/fake/dir/ffmpeg" in path.replace("\\", "/")
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_frozen_meipass_ffmpeg(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "linux"
+        mock_sys.frozen = True
+        mock_sys.executable = "/fake/dir/app"
+        mock_sys._MEIPASS = "/tmp/_MEI123456"
+
+        mock_exists.side_effect = [False, False, False, True]
+
+        path = find_ffmpeg_path()
+        assert "/tmp/_MEI123456/resources/ffmpeg/ffmpeg" in path.replace("\\", "/")
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_fallback_to_which(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "linux"
+        mock_sys.frozen = True
+        mock_sys.executable = "/fake/dir/app"
+        mock_sys._MEIPASS = "/tmp/_MEI123456"
+
+        mock_exists.return_value = False
+        mock_which.return_value = "/usr/bin/ffmpeg"
+
+        path = find_ffmpeg_path()
+        assert path == "/usr/bin/ffmpeg"
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_fallback_missing(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "linux"
+        mock_sys.frozen = True
+        mock_sys.executable = "/fake/dir/app"
+        mock_sys._MEIPASS = "/tmp/_MEI123456"
+
+        mock_exists.return_value = False
+        mock_which.return_value = None
+
+        path = find_ffmpeg_path()
+        assert path == "ffmpeg"
+
+    @patch("backend.os.path.exists")
+    @patch("backend.sys")
+    @patch("backend.shutil.which")
+    def test_windows_exe_extension(self, mock_which, mock_sys, mock_exists):
+        mock_sys.platform = "win32"
+        mock_sys.frozen = False
+        if hasattr(mock_sys, "_MEIPASS"):
+            del mock_sys._MEIPASS
+
+        mock_exists.return_value = True
+
+        path = find_ffmpeg_path()
+        assert path.endswith("ffmpeg.exe")

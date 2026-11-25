@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 import sys
+import shutil
 from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
@@ -59,41 +60,46 @@ def find_ffmpeg_path(executable: str = "ffmpeg") -> str:
     Returns:
         Полный путь к исполняемому файлу или просто имя (если в PATH)
     """
-    exe_name = f"{executable}.exe" if os.name == "nt" else executable
+    exe_name = f"{executable}.exe" if sys.platform == "win32" else executable
     
     # 1. Проверяем локальную папку resources/ffmpeg/
     # (работает при разработке и при portable распространении)
-    script_dir = Path(__file__).parent.resolve()
-    local_ffmpeg = script_dir / "resources" / "ffmpeg" / exe_name
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_ffmpeg = os.path.join(script_dir, "resources", "ffmpeg", exe_name)
     
     # Также проверяем уровень выше (если backend.py в подпапке)
-    parent_ffmpeg = script_dir.parent / "resources" / "ffmpeg" / exe_name
+    parent_ffmpeg = os.path.join(os.path.dirname(script_dir), "resources", "ffmpeg", exe_name)
     
-    if local_ffmpeg.exists():
+    if os.path.exists(local_ffmpeg):
         logger.info(f"✓ Найден {executable} в локальных ресурсах: {local_ffmpeg}")
-        return str(local_ffmpeg)
-    elif parent_ffmpeg.exists():
+        return local_ffmpeg
+    elif os.path.exists(parent_ffmpeg):
         logger.info(f"✓ Найден {executable} в локальных ресурсах: {parent_ffmpeg}")
-        return str(parent_ffmpeg)
+        return parent_ffmpeg
     
     # 2. Проверяем папку с исполняемым файлом (PyInstaller --onefile)
     if getattr(sys, 'frozen', False):
         # Приложение запущено из PyInstaller
-        exe_dir = Path(sys.executable).parent
-        bundled_ffmpeg = exe_dir / exe_name
-        if bundled_ffmpeg.exists():
+        exe_dir = os.path.dirname(sys.executable)
+        bundled_ffmpeg = os.path.join(exe_dir, exe_name)
+        if os.path.exists(bundled_ffmpeg):
             logger.info(f"✓ Найден {executable} рядом с exe: {bundled_ffmpeg}")
-            return str(bundled_ffmpeg)
+            return bundled_ffmpeg
         
         # 3. Проверяем временную папку PyInstaller с ресурсами (_MEIPASS)
         if hasattr(sys, '_MEIPASS'):
-            meipass_ffmpeg = Path(sys._MEIPASS) / "resources" / "ffmpeg" / exe_name
-            if meipass_ffmpeg.exists():
+            meipass_ffmpeg = os.path.join(sys._MEIPASS, "resources", "ffmpeg", exe_name)
+            if os.path.exists(meipass_ffmpeg):
                 logger.info(f"✓ Найден {executable} в _MEIPASS: {meipass_ffmpeg}")
-                return str(meipass_ffmpeg)
+                return meipass_ffmpeg
     
     # 4. Используем системный PATH
-    logger.info(f"→ {executable} не найден локально, используем системный PATH")
+    system_ffmpeg = shutil.which(executable)
+    if system_ffmpeg:
+        logger.info(f"→ Найден {executable} в системном PATH: {system_ffmpeg}")
+        return system_ffmpeg
+
+    logger.info(f"→ {executable} не найден нигде, возвращаем просто имя")
     return executable
 
 
