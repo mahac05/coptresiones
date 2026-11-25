@@ -4,6 +4,7 @@
 
 import os
 import tempfile
+from unittest.mock import patch
 import pytest
 from core.validators import validate_input_file, validate_output_format, build_output_path
 
@@ -37,6 +38,22 @@ class TestValidateInputFile:
         valid, msg = validate_input_file(str(f))
         assert valid is True
         assert msg == ""
+
+    @patch("os.access")
+    def test_unreadable_file(self, mock_access, tmp_path):
+        # Setup mock so it returns False only for R_OK check
+        def access_side_effect(path, mode):
+            if mode == os.R_OK:
+                return False
+            return True
+        mock_access.side_effect = access_side_effect
+
+        f = tmp_path / "unreadable.mp4"
+        f.write_text("data")
+        valid, msg = validate_input_file(str(f))
+
+        assert valid is False
+        assert "Нет прав на чтение" in msg
 
 
 class TestValidateOutputFormat:
