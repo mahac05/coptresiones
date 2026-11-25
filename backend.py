@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 import sys
+import shutil
 from pathlib import Path
 from typing import Callable, Optional
 from dataclasses import dataclass
@@ -94,7 +95,8 @@ def find_ffmpeg_path(executable: str = "ffmpeg") -> str:
     
     # 4. Используем системный PATH
     logger.info(f"→ {executable} не найден локально, используем системный PATH")
-    return executable
+    resolved_path = shutil.which(executable)
+    return resolved_path if resolved_path else executable
 
 
 # ─── Чистые функции построения ffmpeg-команд ─────────────────────────
