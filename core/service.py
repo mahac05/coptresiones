@@ -160,13 +160,15 @@ class ProcessingService:
 
     # ─── Internal workers ────────────────────────────────────────────
 
-    def _run_conversion(
+    def _execute_worker_task(
         self,
-        request: ConversionRequest,
+        request,
         cancel_event: threading.Event,
         on_progress: Optional[Callable[[int, str], None]],
         on_finished: Optional[Callable[[JobResult, str], None]],
         on_log: Optional[Callable[[str], None]],
+        action_name: str,
+        task_func: Callable[[Callable[[int], None]], JobResult]
     ):
         file_name = os.path.basename(request.input_file)
 
@@ -177,14 +179,33 @@ class ProcessingService:
             return
 
         if on_log:
-            on_log(f"▶ Конвертация: {file_name}")
+            on_log(f"▶ {action_name}: {file_name}")
 
         def progress_cb(percent: int):
             if on_progress:
                 on_progress(percent, request.input_file)
 
         try:
-            result = self._converter.convert_mp4_to_audio(
+            result = task_func(progress_cb)
+        except Exception as e:
+            logger.error(f"Ошибка выполнения задачи '{action_name}' ({file_name}): {e}")
+            result = JobResult.error("unknown", str(e))
+            if on_log:
+                on_log(f"❌ Ошибка ({file_name}): {e}")
+
+        if on_finished:
+            on_finished(result, request.input_file)
+
+    def _run_conversion(
+        self,
+        request: ConversionRequest,
+        cancel_event: threading.Event,
+        on_progress: Optional[Callable[[int, str], None]],
+        on_finished: Optional[Callable[[JobResult, str], None]],
+        on_log: Optional[Callable[[str], None]],
+    ):
+        def task_func(progress_cb: Callable[[int], None]) -> JobResult:
+            return self._converter.convert_mp4_to_audio(
                 input_file=request.input_file,
                 output_format=request.output_format,
                 bitrate=request.bitrate,
@@ -193,14 +214,16 @@ class ProcessingService:
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
             )
-        except Exception as e:
-            logger.error(f"Ошибка конвертации ({file_name}): {e}")
-            result = JobResult.error("unknown", str(e))
-            if on_log:
-                on_log(f"❌ Ошибка ({file_name}): {e}")
 
-        if on_finished:
-            on_finished(result, request.input_file)
+        self._execute_worker_task(
+            request=request,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+            on_finished=on_finished,
+            on_log=on_log,
+            action_name="Конвертация",
+            task_func=task_func,
+        )
 
     def _run_compression(
         self,
@@ -210,23 +233,8 @@ class ProcessingService:
         on_finished: Optional[Callable[[JobResult, str], None]],
         on_log: Optional[Callable[[str], None]],
     ):
-        file_name = os.path.basename(request.input_file)
-
-        if cancel_event.is_set():
-            result = JobResult.cancelled()
-            if on_finished:
-                on_finished(result, request.input_file)
-            return
-
-        if on_log:
-            on_log(f"▶ Сжатие: {file_name}")
-
-        def progress_cb(percent: int):
-            if on_progress:
-                on_progress(percent, request.input_file)
-
-        try:
-            result = self._converter.compress_mp4_video(
+        def task_func(progress_cb: Callable[[int], None]) -> JobResult:
+            return self._converter.compress_mp4_video(
                 input_file=request.input_file,
                 output_file=request.output_file,
                 crf=request.crf,
@@ -237,14 +245,16 @@ class ProcessingService:
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
             )
-        except Exception as e:
-            logger.error(f"Ошибка сжатия ({file_name}): {e}")
-            result = JobResult.error("unknown", str(e))
-            if on_log:
-                on_log(f"❌ Ошибка ({file_name}): {e}")
 
-        if on_finished:
-            on_finished(result, request.input_file)
+        self._execute_worker_task(
+            request=request,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+            on_finished=on_finished,
+            on_log=on_log,
+            action_name="Сжатие",
+            task_func=task_func,
+        )
 
     def _run_lecture_compression(
         self,
@@ -254,29 +264,14 @@ class ProcessingService:
         on_finished: Optional[Callable[[JobResult, str], None]],
         on_log: Optional[Callable[[str], None]],
     ):
-        file_name = os.path.basename(request.input_file)
-
-        if cancel_event.is_set():
-            result = JobResult.cancelled()
-            if on_finished:
-                on_finished(result, request.input_file)
-            return
-
-        if on_log:
-            on_log(f"▶ Сжатие лекции: {file_name}")
-
-        def progress_cb(percent: int):
-            if on_progress:
-                on_progress(percent, request.input_file)
-
-        try:
+        def task_func(progress_cb: Callable[[int], None]) -> JobResult:
             options = LectureCompressionOptions(
                 crf=request.crf,
                 preset=request.preset,
                 audio_bitrate=request.audio_bitrate,
                 fps=request.fps,
             )
-            result = self._converter.compress_lecture(
+            return self._converter.compress_lecture(
                 input_file=request.input_file,
                 output_file=request.output_file,
                 options=options,
@@ -284,11 +279,13 @@ class ProcessingService:
                 progress_callback=progress_cb,
                 cancel_event=cancel_event,
             )
-        except Exception as e:
-            logger.error(f"Ошибка сжатия лекции ({file_name}): {e}")
-            result = JobResult.error("unknown", str(e))
-            if on_log:
-                on_log(f"❌ Ошибка ({file_name}): {e}")
 
-        if on_finished:
-            on_finished(result, request.input_file)
+        self._execute_worker_task(
+            request=request,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+            on_finished=on_finished,
+            on_log=on_log,
+            action_name="Сжатие лекции",
+            task_func=task_func,
+        )
