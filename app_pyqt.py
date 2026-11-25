@@ -8,7 +8,6 @@
 
 import sys
 import os
-import threading
 import psutil
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
