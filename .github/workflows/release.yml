@@ -1,0 +1,53 @@
+name: CI & Release Windows EXE
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: pytest tests/ -v
+
+  build-exe:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Download FFmpeg
+        shell: pwsh
+        run: .\download_ffmpeg.ps1
+      - name: Build VideoProcessor.exe
+        run: pyinstaller --clean --noconfirm VideoProcessor.spec
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoProcessor-Windows
+          path: dist/VideoProcessor.exe
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/VideoProcessor.exe
+          generate_release_notes: true
