@@ -19,7 +19,7 @@ ffmpeg_bins = []
 for name in ('ffmpeg.exe', 'ffprobe.exe'):
     path = os.path.join(ffmpeg_dir, name)
     if os.path.exists(path):
-        ffmpeg_bins.append((path, '.'))  # кладём в корень рядом с exe
+        ffmpeg_bins.append((path, 'resources/ffmpeg'))  # соответствует пути _MEIPASS/resources/ffmpeg в backend.py
 
 a = Analysis(
     ['app_pyqt.py'],
