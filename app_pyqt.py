@@ -480,8 +480,9 @@ class VideoProcessorApp(QMainWindow):
         self.ram_label.setStyleSheet(monitor_style)
 
         # Файловые виджеты
-        for fw in list(self.conv_file_widgets.values()) + list(self.comp_file_widgets.values()) + list(self.lect_file_widgets.values()):
-            fw.apply_theme(t, is_dark)
+        for fw_dict in (self.conv_file_widgets, self.comp_file_widgets, self.lect_file_widgets):
+            for fw in fw_dict.values():
+                fw.apply_theme(t, is_dark)
 
         # Путь к папке
         for attr in ['conv_folder_label', 'comp_folder_label', 'lect_folder_label']:
