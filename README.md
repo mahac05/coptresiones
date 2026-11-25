@@ -33,7 +33,7 @@
 ```bash
 # 1. Клонировать репозиторий
 git clone https://github.com/mahac05/coptresiones.git
-cd obrabotchik_vidio
+cd coptresiones
 
 # 2. Установить зависимости
 pip install -r requirements.txt
@@ -55,7 +55,7 @@ python app_pyqt.py
 ## Сборка в exe
 
 ```bash
-pip install pyinstaller
+pip install -r requirements-dev.txt
 pyinstaller VideoProcessor.spec
 ```
 
